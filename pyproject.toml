@@ -1,0 +1,20 @@
+[project]
+name = "alpha-lab"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "numpy>=2.4.0",
+    "pandas>=2.3.3",
+    "pip>=25.3",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.1.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["alpha_lab*"]
+exclude = ["notebooks*"]
