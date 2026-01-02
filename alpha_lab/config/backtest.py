@@ -1,3 +1,24 @@
+"""
+Backtest configuration module.
+回测配置模块.
+
+Key classes / 核心类:
+- BacktestConfig: 回测配置数据类 / backtest configuration dataclass
+- BacktestFreq: 调仓频率枚举 / rebalance frequency enum
+- PriceField: 价格字段枚举 / price field enum
+
+Key functions / 核心函数:
+- default_backtest_config: 返回默认配置 / return default config
+
+配置字段说明 / Configuration Fields:
+    - start_date/end_date: 回测日期范围
+    - rebalance_freq: 调仓频率 (D/W/M)
+    - initial_cash: 初始资金
+    - commission_bps: 手续费(基点)
+    - slippage_bps: 滑点(基点)
+    - price_field: 执行价格(open/close)
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -13,16 +34,18 @@ from alpha_lab.utils.typing import DateLike
 class BacktestFreq(str, Enum):
     """
     Rebalance frequency enumeration.
+    调仓频率枚举.
     
+    继承 str 以支持直接字符串比较和 JSON 序列化.
     Inherits from str to allow direct string comparisons and JSON serialization.
     """
-    DAILY = "D"
-    WEEKLY = "W"
-    MONTHLY = "M"
+    DAILY = "D"     # 每日 / Daily
+    WEEKLY = "W"    # 每周 / Weekly
+    MONTHLY = "M"   # 每月 / Monthly
     
     @classmethod
     def all_values(cls) -> tuple[str, ...]:
-        """Return all valid frequency values."""
+        """Return all valid frequency values. / 返回所有有效的频率值."""
         return tuple(member.value for member in cls)
     
     def __str__(self) -> str:
@@ -33,18 +56,20 @@ class BacktestFreq(str, Enum):
 class PriceField(str, Enum):
     """
     Price field enumeration for backtest execution.
+    回测执行价格字段枚举.
     
+    继承 str 以支持直接字符串比较和 JSON 序列化.
     Inherits from str to allow direct string comparisons and JSON serialization.
     """
-    OPEN = "open"
-    CLOSE = "close"
-    HIGH = "high"
-    LOW = "low"
-    VWAP = "vwap"
+    OPEN = "open"   # 开盘价 / Open price
+    CLOSE = "close" # 收盘价 / Close price
+    HIGH = "high"   # 最高价 / High price
+    LOW = "low"     # 最低价 / Low price
+    VWAP = "vwap"   # 成交量加权平均价 / Volume-weighted average price
     
     @classmethod
     def all_values(cls) -> tuple[str, ...]:
-        """Return all valid price field values."""
+        """Return all valid price field values. / 返回所有有效的价格字段值."""
         return tuple(member.value for member in cls)
     
     def __str__(self) -> str:
@@ -53,14 +78,18 @@ class PriceField(str, Enum):
 
 
 # Type aliases for backwards compatibility and type hints
+# 类型别名,用于向后兼容和类型提示
 RebalanceFreq: TypeAlias = str | BacktestFreq
 PriceFieldType: TypeAlias = str | PriceField
 
-# ------------- Helpers ----------------
+# ------------- Helpers / 辅助函数 ----------------
 
 def _normalize_date(value: DateLike, field_name: str) -> str:
     '''
     Normalize input into ISO date string: YYYY-MM-DD.
+    将输入规范化为 ISO 日期字符串格式: YYYY-MM-DD.
+
+    保持严格格式以避免时区/时间歧义.
     Keep it strict to avoid timezone/time-of-day ambiguity.
     '''
 
@@ -82,13 +111,19 @@ def _normalize_date(value: DateLike, field_name: str) -> str:
     raise TypeError(f"{field_name} must be str/date/datetime, got: {type(value).__name__}")
 
 def _validate_non_negative(name: str, value: float) -> None:
-    """Validate that a numeric value is non-negative."""
+    """
+    Validate that a numeric value is non-negative.
+    验证数值是否非负.
+    """
     if value < 0:
         raise ValueError(f"{name} must be >= 0, got: {value}")
 
 
 def _normalize_freq(value: RebalanceFreq) -> str:
-    """Normalize frequency to string value."""
+    """
+    Normalize frequency to string value.
+    将频率规范化为字符串值.
+    """
     if isinstance(value, BacktestFreq):
         return value.value
     if isinstance(value, str):
@@ -105,7 +140,10 @@ def _normalize_freq(value: RebalanceFreq) -> str:
 
 
 def _normalize_price_field(value: PriceFieldType) -> str:
-    """Normalize price field to string value."""
+    """
+    Normalize price field to string value.
+    将价格字段规范化为字符串值.
+    """
     if isinstance(value, PriceField):
         return value.value
     if isinstance(value, str):
@@ -121,20 +159,21 @@ def _normalize_price_field(value: PriceFieldType) -> str:
     )
 
 
-# ---------------- Core config -------------
+# ---------------- Core config / 核心配置 -------------
 
 @dataclass(slots=True, frozen=True)
 class BacktestConfig:
     """
     Backtest configuration (lightweight; no pandas dependency).
+    回测配置(轻量级,无 pandas 依赖).
 
-    Notes:
-        - start_date/end_date are normalized to 'YYYY-MM-DD' in __post_init__.
-        - commission_bps/slippage_bps are in basis points (1 bps = 0.01%).
-        - Supports both string values and Enum members for freq/price_field.
+    Notes / 注意事项:
+        - start_date/end_date 在 __post_init__ 中规范化为 'YYYY-MM-DD'
+        - commission_bps/slippage_bps 以基点为单位 (1 bps = 0.01%)
+        - 支持字符串值和枚举成员作为 freq/price_field 参数
     
-    Examples:
-        Using enums:
+    Examples / 示例:
+        使用枚举 / Using enums:
         >>> cfg = BacktestConfig(
         ...     start_date="2020-01-01",
         ...     end_date="2024-12-31",
@@ -145,7 +184,7 @@ class BacktestConfig:
         ...     price_field=PriceField.CLOSE,
         ... )
         
-        Using strings:
+        使用字符串 / Using strings:
         >>> cfg = BacktestConfig(
         ...     start_date="2020-01-01",
         ...     end_date="2024-12-31",
@@ -157,17 +196,17 @@ class BacktestConfig:
         ... )
     """
 
-    start_date: DateLike
-    end_date: DateLike
+    start_date: DateLike      # 开始日期
+    end_date: DateLike        # 结束日期
 
-    rebalance_freq: RebalanceFreq  # 'D'/'W'/'M' or BacktestFreq enum
-    initial_cash: float
+    rebalance_freq: RebalanceFreq  # 调仓频率 'D'/'W'/'M' 或 BacktestFreq 枚举
+    initial_cash: float       # 初始资金
     
-    commission_bps: float  # fee bps (round-trip handled elsewhere)
-    slippage_bps: float  # slippage, bps
+    commission_bps: float     # 手续费(基点)
+    slippage_bps: float       # 滑点(基点)
 
-    price_field: PriceFieldType  # 'open'/'close'/etc or PriceField enum
-    benchmark: str | None = None
+    price_field: PriceFieldType  # 执行价格 'open'/'close'/等 或 PriceField 枚举
+    benchmark: str | None = None # 基准指数(如 "SPY")
     
     def __post_init__(self) -> None:
         # Normalize dates into ISO strings
@@ -195,26 +234,39 @@ class BacktestConfig:
     def with_updates(self, **kwargs) -> BacktestConfig:
         """
         Create a new config with updated fields (re-validates via __post_init__).
+        创建一个更新字段后的新配置(通过 __post_init__ 重新验证).
         """
         return replace(self, **kwargs)
 
 def default_backtest_config() -> BacktestConfig:
     """
     Return a reasonable default backtest config for demos/notebooks.
+    返回用于演示/笔记本的默认回测配置.
 
-    You are expected to override fields in notebook, e.g.:
-        cfg = default_backtest_config()
-        cfg = cfg.with_updates(start_date="2018-01-01", rebalance_freq=BacktestFreq.MONTHLY)
+    返回值 / Returns:
+        BacktestConfig 对象,包含以下默认值:
+        - start_date: "2018-01-01"
+        - end_date: "2024-12-31"
+        - rebalance_freq: 月度 (MONTHLY)
+        - initial_cash: 100 万美元
+        - commission_bps: 5 基点
+        - slippage_bps: 2 基点
+
+    使用方式 / Usage:
+        在笔记本中,你可以覆盖默认值:
+        You are expected to override fields in notebook, e.g.:
+        >>> cfg = default_backtest_config()
+        >>> cfg = cfg.with_updates(start_date="2018-01-01", rebalance_freq=BacktestFreq.MONTHLY)
     """
     return BacktestConfig(
         start_date="2018-01-01",
         end_date="2024-12-31",
-        rebalance_freq=BacktestFreq.MONTHLY,
-        initial_cash=1_000_000.0,
-        commission_bps=5.0,
-        slippage_bps=2.0,
-        price_field=PriceField.CLOSE,
-        benchmark=None,  # e.g. "SPY" if you have it in your universe
+        rebalance_freq=BacktestFreq.MONTHLY,  # 月度调仓
+        initial_cash=1_000_000.0,             # 初始资金 100 万
+        commission_bps=5.0,                    # 手续费 5 基点 (0.05%)
+        slippage_bps=2.0,                      # 滑点 2 基点 (0.02%)
+        price_field=PriceField.CLOSE,          # 使用收盘价执行
+        benchmark=None,                        # 基准,如 "SPY"(如果股票池包含的话)
     )
 
 __all__ = [

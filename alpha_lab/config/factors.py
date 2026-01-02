@@ -40,7 +40,7 @@ class FactorComboConfig:
             raise ValueError("factors dict cannot be empty")
         
         # 简单的权重检查 
-        # 不强制 sum=1， 因为有时候可能是打分加总
+        # 不强制 sum=1, 因为有时候可能是打分加总
         for fname, weight in self.factors.items():
             if not fname.strip():
                 raise ValueError("Factor name in combo cannot be empty")

@@ -39,6 +39,10 @@ def get_paths(root: Path | str | None = None) -> Paths:
     2) env var ALPHA_LAB_ROOT
     3) search upwards from this file for pyproject.toml/.git/README.md
     '''
+    # P1-1: 确保 root 是 Path 类型
+    if root is not None and isinstance(root, str):
+        root = Path(root)
+    
     if root is None:
         env_root = os.environ.get("ALPHA_LAB_ROOT")
         root = Path(env_root).expanduser() if env_root else None

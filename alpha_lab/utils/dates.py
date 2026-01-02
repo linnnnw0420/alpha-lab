@@ -1,3 +1,14 @@
+"""
+Date utilities for alpha_lab.
+日期工具模块.
+
+Key functions / 核心函数:
+- annualization_factor: 获取年化因子 / get annualization multiplier
+- parse_date: 解析日期字符串 / parse date string to Timestamp
+- align_to_trading_day: 对齐到交易日 / align date to trading calendar
+- generate_rebalance_dates: 生成调仓日期 / generate rebalance dates from calendar
+"""
+
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -13,47 +24,61 @@ except ImportError:
 
 # -----------------------------------------------------------------------------
 # Frequency <-> annualization factor mapping
+# 频率 <-> 年化因子映射
 # -----------------------------------------------------------------------------
 
 _ANNUALIZATION_FACTORS: dict[str, float] = {
-    "D": 252.0, # trading days per year
-    "W": 52.0, # weeks
-    "M": 12.0, # months
+    "D": 252.0, # 每年交易日数 / trading days per year
+    "W": 52.0,  # 每年周数 / weeks per year
+    "M": 12.0,  # 每年月数 / months per year
 }
 
 def annualization_factor(freq: RebalanceFreq) -> float:
     """
     Return the annualization multiplier for a given frequency.
+    返回指定频率对应的年化乘数.
 
-    Args: freq: 'D' (daily), 'W' (weekly) 'M' (monthly)
+    用途 / Usage:
+        - 日波动率  ->  年化波动率: 日波动率 × √252
+        - 月收益率  ->  年化收益率: 月收益率 × 12
 
-    Returns:
-        Number of periods per year (252 for daily, 52 for weekly, 12 for monthly).
+    Args / 参数: 
+        freq: 'D' (每日), 'W' (每周), 'M' (每月)
+
+    Returns / 返回:
+        每年的周期数 (日=252, 周=52, 月=12)
     
     Raises:
-        ValueError: if freq is not recognized.
+        ValueError: 如果 freq 不被识别
     """
     if freq not in _ANNUALIZATION_FACTORS:
         raise ValueError(f"Unknown freq: {freq!r}, must be one of the {list(_ANNUALIZATION_FACTORS.keys())}")
     return _ANNUALIZATION_FACTORS[freq]
 
 # -----------------------------------------------------------------------------
-# Date parsing & alignment
+# Date parsing & alignment / 日期解析与对齐
 # -----------------------------------------------------------------------------
 
 def parse_date(value: DateLike) -> PandasTimestamp:
     """
     Convert DateLike (str/date/datetime) into pd.Timestamp.
+    将 DateLike(字符串/日期/日期时间)转换为 pd.Timestamp.
 
-    Args:
-        value: ISO date string, datetime.date, or datetime.datetime
+    支持的输入格式 / Supported Input Formats:
+        - "2024-01-15" (ISO 字符串)
+        - datetime.date(2024, 1, 15)
+        - datetime.datetime(2024, 1, 15)
+        - pd.Timestamp("2024-01-15")
 
-    Returns:
-        pd.Timestamp (timezone-naive)
+    Args / 参数:
+        value: ISO 日期字符串,datetime.date 或 datetime.datetime
+
+    Returns / 返回:
+        pd.Timestamp (无时区)
 
     Raises:
-        ImportError: if pandas is not installed
-        ValueError: if string cannot be parsed
+        ImportError: 如果 pandas 未安装
+        ValueError: 如果字符串无法解析
     """
     if pd is None:
         raise ImportError("pandas is required for parse_date()")
@@ -75,17 +100,22 @@ def align_to_trading_day(
 ) -> PandasTimestamp:
     """
     Align a date to the nearest trading day in the calendar.
+    将日期对齐到日历中最近的交易日.
 
-    Args:
-        dt: target date
-        trading_calendar: sorted DatetimeIndex of all trading days
-        method: 'previous' (nearest past day) or 'next' (nearest future day)
+    使用场景 / Use Cases:
+        - 输入日期是周末或假日时,找到前一个/后一个交易日
+        - 确保回测日期都落在交易日上
 
-    Returns:
-        The aligned trading day as pd.Timestamp
+    Args / 参数:
+        dt: 目标日期
+        trading_calendar: 已排序的交易日历 (DatetimeIndex)
+        method: 'previous' (前一个交易日) 或 'next' (后一个交易日)
+
+    Returns / 返回:
+        对齐后的交易日 (pd.Timestamp)
 
     Raises:
-        ValueError: if method is invalid or date is out of calendar bounds
+        ValueError: 如果 method 无效或日期超出日历范围
     """
     if pd is None:
         raise ImportError("pandas is required for align_to_trading_day()")
@@ -97,11 +127,13 @@ def align_to_trading_day(
         return ts
     
     if method == "previous":
+        # 找到 <= ts 的最后一个交易日 / Find last trading day <= ts
         candidates = trading_calendar[trading_calendar <= ts]
         if candidates.empty:
             raise ValueError(f"No trading day on or before {ts}")
         return candidates[-1]
     elif method == "next":
+        # 找到 >= ts 的第一个交易日 / Find first trading day >= ts
         candidates = trading_calendar[trading_calendar >= ts]
         if candidates.empty:
             raise ValueError(f"No trading day on or after {ts}")
@@ -110,7 +142,7 @@ def align_to_trading_day(
         raise ValueError(f"method must be 'previous' or 'next', got: {method!r}")
     
 # -----------------------------------------------------------------------------
-# Rebalance date generation
+# Rebalance date generation / 调仓日期生成
 # -----------------------------------------------------------------------------
 
 def generate_rebalance_dates(
@@ -119,39 +151,49 @@ def generate_rebalance_dates(
 ) -> PandasDatetimeIndex:
     """
     Generate rebalance dates from a full trading calendar.
+    从完整的交易日历生成调仓日期.
 
-    Args:
-        trading_calendar: complete sorted DatetimeIndex of all trading days
-        freq: 'D' (daily), 'W' (weekly), or 'M' (monthly)
+    生成规则 / Generation Rules:
+        - 'D' (Daily): 返回所有交易日
+        - 'W' (Weekly): 每周的最后一个交易日
+        - 'M' (Monthly): 每月的最后一个交易日
 
-    Returns:
-        Subset of trading_calendar at the specified frequency
+    为什么用"最后一个"交易日 / Why "last" trading day:
+        - 月末通常数据更完整
+        - 符合行业惯例
 
-    Notes:
-        - Daily: all days
-        - Weekly: last trading day of each week
-        - Monthly: last trading day of each month
+    Args / 参数:
+        trading_calendar: 完整的已排序交易日历 (DatetimeIndex)
+        freq: 'D' (每日), 'W' (每周), 或 'M' (每月)
+
+    Returns / 返回:
+        交易日历的子集(指定频率的调仓日期)
     """
     if pd is None:
         raise ImportError("pandas is required for generate_rebalance_dates")
     
     if freq == "D":
+        # 每日:返回所有交易日 / Daily: return all trading days
         return trading_calendar
     
-    # Convert to Series with dummy values to use resample
-    s = pd.Series(1, index=trading_calendar)
+    # 转换为 Series 以便使用 groupby / Convert to Series to use groupby
+    cal_series = pd.Series(trading_calendar, index=trading_calendar)
 
     if freq == "W":
-        # resample to week-end, take last available day
-        resampled = s.resample("W").last()
+        # 按年-周分组,取每周最后一个交易日
+        # Group by year-week, take last trading day of each week
+        grouped = cal_series.groupby([cal_series.index.isocalendar().year, 
+                                       cal_series.index.isocalendar().week]).last()
     elif freq == "M":
-        # resample to month-end, take last available day
-        resampled = s.resample("M").last()
+        # 按年-月分组,取每月最后一个交易日
+        # Group by year-month, take last trading day of each month
+        grouped = cal_series.groupby([cal_series.index.year, cal_series.index.month]).last()
     else:
         raise ValueError(f"Unknown freq: {freq!r}")
     
-    # Drop NaN (in case there's a gap), return index
-    return resampled.dropna().index
+    # 返回实际的交易日期(而非周期结束日期)
+    # Return the actual trading dates (not the period end dates)
+    return pd.DatetimeIndex(grouped.values, name="date")
 
 __all__ = [
     "annualization_factor",
