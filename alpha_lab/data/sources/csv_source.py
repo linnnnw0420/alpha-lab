@@ -31,6 +31,7 @@ def load_csv_prices(
     end_date: PandasTimestamp,
     field: PriceField,
     paths: Paths,
+    csv_file: str | None = None,
 ) -> PandasDataFrame:
     """
     Load prices from csv files.
@@ -48,12 +49,18 @@ def load_csv_prices(
         end_date: 结束日期(包含)
         field: 价格字段 'open'/'high'/'low'/'close'/'vwap'
         paths: Paths 配置对象
+        csv_file: 指定CSV文件名，None则按默认规则搜索
     
     Returns / 返回:
         DataFrame: index=日期, columns=股票代码
     """
     # 定位 CSV 文件 / Locate CSV file
-    csv_path = _find_csv_file(field, paths)
+    if csv_file is not None:
+        csv_path = paths.data_raw_dir / csv_file
+        if not csv_path.exists():
+            raise FileNotFoundError(f"Specified CSV file not found: {csv_path}")
+    else:
+        csv_path = _find_csv_file(field, paths)
     logger.debug(f"Reading {csv_path}")
 
     try:

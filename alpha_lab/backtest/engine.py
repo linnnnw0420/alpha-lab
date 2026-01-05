@@ -236,13 +236,18 @@ def run_backtest(
     # 过滤权重,只保留调仓日期 / Filter weights to rebalance dates only
     weights_aligned = _align_weights_to_schedule(weights, rebalance_dates)
 
+    # Apply execution delay (signal day -> execution day)
+    weights_exec = _shift_weights_by_trading_day(
+        weights=weights_aligned,
+        trading_calendar=trading_calendar,
+        delay_days=int(config.execution_delay_days),
+    )
+
     # Step 4: Run simulation / 第四步:运行模拟
     equity_curve, positions_daily, trades_df = _simulate_portfolio(
-        weights=weights_aligned,
+        weights=weights_exec    ,
         prices=prices,
-        initial_cash=config.initial_cash,
-        commission_bps=config.commission_bps,
-        slippage_bps=config.slippage_bps,
+        config=config,
         record_trades=record_trades,
         verbose=verbose,
     )
@@ -268,6 +273,43 @@ def run_backtest(
 # -----------------------------------------------------------------------------
 # Internal helpers
 # -----------------------------------------------------------------------------
+
+def _shift_weights_by_trading_day(
+    weights: PandasDataFrame, 
+    trading_calendar: PandasDatetimeIndex,
+    delay_days: int,
+) -> PandasDataFrame:
+    """
+    Shift weights by N trading days (signal day -> execution day).
+    将权重表按交易日历后平移 N 个交易日 (信号日 -> 成交日)
+
+    Notes:
+    - 如果平移后超出交易日历末尾，会丢弃这些信号
+    - 如果多个信号映射到同一成交日（少见），保留最后一个
+    """
+    if delay_days <= 0 or weights.empty:
+        return weights
+    
+    cal = pd.DatetimeIndex(trading_calendar).normalize()
+    sig = pd.DatetimeIndex(weights.index).normalize()
+
+    locs = cal.get_indexer(sig)
+    if (locs < 0).any():
+        missing = sig[locs < 0]
+        raise ValueError(
+            f"Some weight dates are not in trading_calendar (first few: {missing[:5].tolist()})"
+        )
+    
+    exec_locs = locs + int(delay_days)
+    ok = exec_locs < len(cal)
+    dropped = int((~ok).sum())
+    if dropped > 0:
+        logger.info(f"execution_delay_days={delay_days}: dropped {dropped} signals beyond end_date")
+    
+    shifted = weights.iloc[ok].copy()
+    shifted.index = cal[exec_locs[ok]]
+    shifted = shifted[~pd.DatetimeIndex(shifted.index).duplicated(keep="last")].sort_index()
+    return shifted
 
 def _align_weights_to_schedule(
     weights: PandasDataFrame,
@@ -297,9 +339,7 @@ def _align_weights_to_schedule(
 def _simulate_portfolio(
     weights: PandasDataFrame,
     prices: PandasDataFrame,
-    initial_cash: float,
-    commission_bps: float,
-    slippage_bps: float,
+    config: BacktestConfig, 
     record_trades: bool,
     verbose: bool = False,
 ) -> tuple[PandasSeries, PandasDataFrame, PandasDataFrame | None]:
@@ -332,6 +372,11 @@ def _simulate_portfolio(
         - positions_daily: 每日持仓权重矩阵 (DataFrame)
         - trades_df: 交易记录表 (DataFrame or None)
     """
+    initial_cash = config.initial_cash
+    commission_bps = config.commission_bps
+    slippage_bps = config.slippage_bps
+    max_turnover = config.max_turnover
+    rebalance_threshold = config.rebalance_threshold
     # -------------------------------------------------------------------------
     # 边界情况处理 / Handle edge cases
     # -------------------------------------------------------------------------
@@ -436,6 +481,54 @@ def _simulate_portfolio(
             # -----------------------------------------------------------------
             trade_value = (trades.abs() * px.fillna(0)).sum()  # 成交金额
             turnover_pct = trade_value / portfolio_value if portfolio_value > 1e-6 else 0.0
+
+            # =================================================================
+            # Step E.1: 换手控制 - rebalance_threshold & max_turnover
+            # Turnover control: skip if below threshold, cap if above max
+            # =================================================================
+            
+            # (1) 低于阈值不调仓 / Skip rebalance if turnover below threshold
+            if turnover_pct < rebalance_threshold:
+                if verbose:
+                    print(f"[{date.date()}] SKIP: turnover {turnover_pct:.2%} < threshold {rebalance_threshold:.2%}")
+                logger.debug(f"{date.date()}: Skip rebalance, turnover {turnover_pct:.2%} < {rebalance_threshold:.2%}")
+                continue
+            
+            # (2) 超过上限部分做调仓 / Partial rebalance if turnover exceeds max
+            if turnover_pct > max_turnover:
+                # 计算当前权重 / Calculate current weights
+                current_weights = pd.Series(0.0, index=all_assets)
+                if portfolio_value > 1e-6:
+                    current_weights = (holdings * px.fillna(0)) / portfolio_value
+
+                # 缩放因子: 只移动 max_turnover / turnover_pct 的距离
+                # Scaling factor: move only max_turnover / turnover_pct of the way
+                scaling = max_turnover / turnover_pct
+
+                # 调整后权重 = 当前权重 + scaling x (目标权重 - 当前权重)
+                # Adjusted weights = current + scaling * (target - current)
+                adjusted_weights = current_weights + scaling * (target_weights - current_weights)
+
+                # 重新计算目标股数和交易量 / Recalculate target shares and trades
+                target_dollar = adjusted_weights * portfolio_value
+                for asset in adjusted_weights.index:
+                    if valid_price_mask.get(asset, False):
+                        target_shares[asset] = target_dollar[asset] / px[asset]
+
+                # 重新计算 trades
+                for asset in all_assets:
+                    if valid_price_mask.get(asset, False):
+                        trades[asset] = target_shares[asset] - holdings[asset]
+                
+                # 更新换手率统计
+                trade_value = (trades.abs() * px.fillna(0)).sum()
+                actual_turnover = trade_value / portfolio_value if portfolio_value > 1e-6 else 0.0
+
+                if verbose:
+                    print(f"[{date.date()}] PARTIAL: turnover capped {turnover_pct:.2%} -> {actual_turnover:.2%}")
+                logger.debug(f"{date.date()}: Partial rebalance, {turnover_pct:.2%} -> {actual_turnover:.2%}")
+                
+                turnover_pct = actual_turnover  # 更新用于后续记录
             
             # -----------------------------------------------------------------
             # Step F: 计算交易成本 / Apply transaction costs

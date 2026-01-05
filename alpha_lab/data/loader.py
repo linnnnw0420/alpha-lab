@@ -92,6 +92,7 @@ def load_prices(
     source: Literal["csv", "parquet"] = "csv",
     align_dates: bool = True,
     forward_fill_limit: int | None = 5,
+    csv_file: str | None = None,
 ) -> PandasDataFrame:
     """
     Load price panel (date x asset).
@@ -110,6 +111,7 @@ def load_prices(
         source: 数据源 'csv' 或 'parquet'
         align_dates: 是否对齐到交易日历并前向填充 / align to trading calendar & forward-fill
         forward_fill_limit: 最大前向填充天数 (None=无限制) / max days to ffill
+        csv_file: 指定CSV文件名 (如 'nasdaq_50_stocks_2023.csv')，None则按默认规则搜索
     
     Returns / 返回:
         DataFrame: index=date, columns=tickers, values=prices
@@ -142,6 +144,7 @@ def load_prices(
             end_date=end_ts,
             field=field,
             paths=paths,
+            csv_file=csv_file,
         )
     elif source == "parquet":
         raise NotImplementedError("Parquet source not yet implemented")

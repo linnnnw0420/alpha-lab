@@ -207,6 +207,10 @@ class BacktestConfig:
 
     price_field: PriceFieldType  # 执行价格 'open'/'close'/等 或 PriceField 枚举
     benchmark: str | None = None # 基准指数(如 "SPY")
+
+    max_turnover: float = 1.0
+    rebalance_threshold: float = 0.0
+    execution_delay_days: int = 0
     
     def __post_init__(self) -> None:
         # Normalize dates into ISO strings
@@ -227,7 +231,11 @@ class BacktestConfig:
 
         if self.initial_cash <= 0:
             raise ValueError(f"initial_cash must be > 0, got: {self.initial_cash}")
+        if not 0 <= self.max_turnover <= 1:
+            raise ValueError(f"max_turnover must be in [0, 1], got {self.max_turnover}")
 
+        _validate_non_negative("execution_delay_days", float(self.execution_delay_days))
+        _validate_non_negative("rebalance_threshold", float(self.rebalance_threshold))
         _validate_non_negative("commission_bps", float(self.commission_bps))
         _validate_non_negative("slippage_bps", float(self.slippage_bps))
     
