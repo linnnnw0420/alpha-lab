@@ -268,3 +268,30 @@ notebooks/
 5. **加稳健性评估**：年度拆分 + 简单 walk-forward + 参数敏感性表
 
 做完这五个，你的框架就从“能跑的玩具”升级到“至少不会自己骗自己”的研究平台。
+
+Plan: 因子诊断 + 稳健性评估贯通集成
+把“因子研究”从 notebook 临时代码提升为可复用模块：先标准化输入口径（因子值、未来收益、调仓/执行延迟），再实现 IC/分层/衰减三件套；在此基础上增加年度拆分、简单 walk-forward 和参数敏感性表作为批量运行器。整体不侵入回测引擎职责，采用“pipeline/orchestrator 负责串联，engine 只负责权重→净值”的分层。
+
+Steps
+明确数据口径与对齐规则，定义 FactorResearchData 输入形态，复用现有价格与日历逻辑：loader.py, dates.py, engine.py
+新增因子诊断模块目录并落三件套 API：IC、分层收益、衰减曲线，输出统一 FactorDiagnosticsResult（Series/DataFrame + stats dict）：alpha_lab/diagnostics/ic.py, alpha_lab/diagnostics/quantile.py, alpha_lab/diagnostics/decay.py
+在“因子→权重”链路旁新增一个轻量 orchestrator（不改 engine）：负责加载 prices→算 factor→算 forward returns→跑 diagnostics→（可选）再走权重与回测：factors, weighting.py, main.py 或新增 alpha_lab/pipeline/factor_research.py
+增加稳健性评估运行器：年度拆分（按年循环）、简单 walk-forward（rolling/expanding）、参数敏感性表（网格批跑 + 汇总表）：alpha_lab/robustness/year_split.py, alpha_lab/robustness/walk_forward.py, alpha_lab/robustness/sensitivity.py
+将结果汇总到现有指标/报告风格：复用 summary 表输出习惯，并把 diagnostics/robustness 结果保存到统一路径解析（复用配置）：summary.py, paths.py, backtest.py
+Further Considerations
+口径选择：分层/IC 是“每日”还是“仅调仓日”；建议默认“调仓日口径”以贴近真实执行（参考 engine.py 的调仓对齐）。
+延迟一致性：diagnostics 的 forward returns 需显式支持 execution_delay_days 与 holding_period，避免和回测口径打架（配置来源建议复用 backtest.py）。
+参数敏感性规模：先限定网格点数并缓存中间产物（prices、factor、forward_returns），否则组合爆炸导致运行时间不可控。
+
+把“是否可交易/是否已上市/如何估值”从“NaN 就当不能交易”升级为显式状态：数据层生成 listed_mask/tradable_mask 与 mark_price，回测层用 exec_price 做成交、用 mark_price 做估值，并在退市点按策略强制处置持仓。这样既能避免当前 NaN 估值被当 0 的失真，也能让 universe/因子诊断/回测三条链路口径一致。
+
+Steps
+把价格拆成执行价与估值价输出：loader.py 的 load_prices 与对齐函数
+新增状态面板生成：listed_mask、tradable_mask、price_valid_mask，优先基于元数据，缺失时用启发式：loader.py,（建议新增）alpha_lab/data/metadata.py
+动态 universe：调仓日按 listed_mask & tradable_mask 过滤标的：universe.py, dates.py
+回测引擎改为显式使用 exec_price 成交、mark_price 估值，并实现退市处置策略：engine.py, backtest.py
+让因子诊断与稳健性评估复用同一套 mask/价格口径，避免“研究可行、交易不可行”的错觉：你后续新增的 diagnostics/robustness 模块入口统一接收 masks
+Further Considerations
+没有 IPO/退市/停牌元数据时：用“首次非 NaN=IPO、连续缺失=停牌、最后非 NaN=退市”可跑通，但会混淆数据断更与真实事件。
+停牌估值口径：建议 mark_price=last_valid（可加最长停牌天数上限），成交口径建议严格要求当日有效价格，否则不交易。
+退市处置策略：至少支持 “最后可交易日按估值价强制清仓入现金” vs “退市后写零”，并在配置里显式选择，避免隐式乐观/悲观。

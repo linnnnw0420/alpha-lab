@@ -27,6 +27,7 @@ def top_k_long_only(
     factor: PandasDataFrame,
     k_pct: float = 0.2,
     equal_weight: bool = True,
+    buffer_pct: float = 0.0,
 ) -> PandasDataFrame:
     """
     Long-only strategy: equal-weight top K% assets by factor score.
@@ -41,25 +42,34 @@ def top_k_long_only(
         factor: 因子矩阵 (date x asset),因子分数
         k_pct: 持仓资产比例 (0-1),如 0.2 = 前 20%
         equal_weight: 如果 True,等权重;如果 False,按排名加权
+        buffer_pct: 换仓缓冲比例(0-1),>0 启用 hysteresis/no-trade band
+                   buffer_pct=0 表示每期完全按 top-K 重算
 
     Returns / 返回:
         DataFrame (date x asset): 目标权重,每天权重和为 1.0
 
     Example / 示例:
         >>> # 做多动量因子前20%的股票
-        >>> weights = top_k_long_only(momentum_factor, k_pct=0.2)
+        >>> weights = top_k_long_only(momentum_factor, k_pct=0.2, buffer_pct=0.05)
     """
 
     if not (0 < k_pct <= 1):
         raise ValueError(f"k_pct must be in (0, 1], got {k_pct}")
+    if buffer_pct < 0:
+        raise ValueError(f"buffer_pct must be >= 0, got {buffer_pct}")
     
     if factor.empty:
         logger.warning("Empty factor DataFrame, returning empty weights")
         return pd.DataFrame(index=factor.index, columns=factor.columns, dtype=float)
     
-    logger.debug(f"Computing long-only weights: top {k_pct:.1%}, equal_weight={equal_weight}")
+    use_hysteresis = buffer_pct > 0
+    logger.debug(
+        f"Computing long-only weights: top {k_pct:.1%}, equal_weight={equal_weight}, "
+        f"buffer_pct={buffer_pct:.1%}"
+    )
 
     weights = pd.DataFrame(0.0, index=factor.index, columns=factor.columns)
+    prev_selected: list[str] = []
 
     for date in factor.index:
         scores = factor.loc[date]
@@ -72,24 +82,53 @@ def top_k_long_only(
             logger.debug(f"No valid scores on {date}, skipping")
             continue
         
-        n_assets = len(valid_scores)
+        ranked = valid_scores.sort_values(ascending=False)
+        n_assets = len(ranked)
         n_select = max(1, int(n_assets * k_pct))  # 至少选择 1 个资产
 
-        # 选择因子值最高的 K 个资产 / Select top K assets
-        top_assets = valid_scores.nlargest(n_select).index
+        if not use_hysteresis or not prev_selected:
+            # 选择因子值最高的 K 个资产 / Select top K assets
+            selected = list(ranked.index[:n_select])
+        else:
+            buffer_n = max(0, int(n_assets * buffer_pct))
+            keep_cutoff = min(n_assets, n_select + buffer_n)
+            buffer_assets = list(ranked.index[:keep_cutoff])
+
+            # 保留仍在 top-(k+buffer) 的旧持仓
+            # Keep previous holdings if still in top-(k+buffer)
+            keep = [t for t in prev_selected if t in buffer_assets]
+            selected = keep[:n_select]
+
+            # 用最新 top-k 填满
+            # Fill with current top-k
+            for t in ranked.index[:n_select]:
+                if t not in selected:
+                    selected.append(t)
+                if len(selected) >= n_select:
+                    break
+
+            # 如果还不够,从 buffer 内补齐
+            if len(selected) < n_select:
+                for t in buffer_assets:
+                    if t not in selected:
+                        selected.append(t)
+                    if len(selected) >= n_select:
+                        break
+
+        prev_selected = selected
 
         if equal_weight:
             # 等权重 / Equal weight
-            weights.loc[date, top_assets] = 1.0 / len(top_assets)
+            weights.loc[date, selected] = 1.0 / len(selected)
         else:
             # 按归一化排名加权 / Weight by normalized rank
-            ranks = valid_scores[top_assets].rank(pct=True)
+            ranks = valid_scores[selected].rank(pct=True)
             rank_sum = ranks.sum()
             if rank_sum > 0:
-                weights.loc[date, top_assets] = ranks / rank_sum
+                weights.loc[date, selected] = ranks / rank_sum
             else:
                 # 回退到等权重 / Fallback to equal weight if rank sum is zero
-                weights.loc[date, top_assets] = 1.0 / len(top_assets)
+                weights.loc[date, selected] = 1.0 / len(selected)
         
     return weights
     
@@ -268,11 +307,77 @@ def apply_weight_constraints(
         约束后的权重
 
     Note / 注意:
-        v0 版本预留接口 - v1 完整实现.
-        v0 stub - full implementation in v1.
+        - 先做持仓上限截断,再做换手率限制
+        - 如果传入 prev_weights,第一期用它对齐;否则假设上一期为 0
     """
-    logger.warning("apply_weight_constraints is v0 stub - will be implemented in v1")
-    raise NotImplementedError("Weight constraints not yet implemented")
+    if weights.empty:
+        logger.warning("Empty weights DataFrame")
+        return weights.copy()
+    if max_position_size is not None and max_position_size <= 0:
+        raise ValueError(f"max_position_size must be > 0, got {max_position_size}")
+    if max_turnover is not None and max_turnover < 0:
+        raise ValueError(f"max_turnover must be >= 0, got {max_turnover}")
+
+    adjusted = pd.DataFrame(0.0, index=weights.index, columns=weights.columns)
+    prev = None
+    if prev_weights is not None:
+        prev = prev_weights.reindex(weights.columns).fillna(0.0).astype(float)
+
+    for date in weights.index:
+        target = weights.loc[date].fillna(0.0).astype(float)
+
+        # (1) 单票上限 / Position cap
+        if max_position_size is not None:
+            orig_long = target.clip(lower=0.0).sum()
+            orig_short = (-target.clip(upper=0.0)).sum()
+            target = target.clip(lower=-max_position_size, upper=max_position_size)
+            target = _normalize_long_short(target, orig_long, orig_short)
+
+        # (2) 换手限制 / Turnover limit
+        if max_turnover is not None:
+            if prev is None:
+                prev = pd.Series(0.0, index=weights.columns)
+            target = _apply_turnover_limit(prev, target, max_turnover)
+
+        adjusted.loc[date] = target
+        prev = target
+
+    return adjusted
+
+def _normalize_long_short(
+    weights: PandasSeries,
+    target_long: float,
+    target_short: float,
+) -> PandasSeries:
+    """
+    Normalize long/short sides separately to preserve original exposure.
+    分别归一化多空两侧,保持原始敞口规模.
+    """
+    long_side = weights.clip(lower=0.0)
+    short_side = -weights.clip(upper=0.0)
+
+    if target_long > 1e-12 and long_side.sum() > 1e-12:
+        long_side = long_side * (target_long / long_side.sum())
+    if target_short > 1e-12 and short_side.sum() > 1e-12:
+        short_side = short_side * (target_short / short_side.sum())
+
+    return long_side - short_side
+
+def _apply_turnover_limit(
+    prev_weights: PandasSeries,
+    target_weights: PandasSeries,
+    max_turnover: float,
+) -> PandasSeries:
+    """
+    Cap turnover by scaling the move from prev to target.
+    通过缩放 (target-prev) 的步长控制换手率.
+    """
+    delta = target_weights - prev_weights
+    turnover = delta.abs().sum()
+    if turnover <= max_turnover or turnover < 1e-12:
+        return target_weights
+    scaling = max_turnover / turnover
+    return prev_weights + scaling * delta
 
 __all__ = [
     "top_k_long_only",

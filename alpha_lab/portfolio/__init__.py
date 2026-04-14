@@ -14,6 +14,7 @@ from alpha_lab.portfolio.weighting import (
     top_k_long_only,
     top_k_long_short,
     proportional_weights,
+    apply_weight_constraints,
 )
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "top_k_long_only",
     "top_k_long_short",
     "proportional_weights",
+    "apply_weight_constraints",
 ]

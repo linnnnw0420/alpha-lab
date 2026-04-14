@@ -12,6 +12,7 @@ import pandas as pd
 
 from alpha_lab.backtest.engine import BacktestResult
 from alpha_lab.metrics.performance import compute_performance_metrics
+from alpha_lab.metrics.trading import compute_trading_metrics
 from alpha_lab.metrics.drawdown import compute_drawdown_metrics
 from alpha_lab.utils.logging import get_logger
 from alpha_lab.utils.typing import PandasSeries, PandasDataFrame, RebalanceFreq
@@ -86,13 +87,31 @@ def generate_backtest_summary(
     """
     # NOTE: result.returns 是 equity_curve.pct_change(),是日频数据
     # 年化系数应该用 "D"(252),不是 rebalance_freq
-    return generate_metrics_summary(
+    base_metrics = generate_metrics_summary(
         equity_curve=result.equity_curve,
         returns=result.returns,
         freq="D",  # returns 是日频,不是 rebalance 频率
         risk_free_rate=0.0,  # v0: assume 0, can be added to config in v1
         as_dataframe=as_dataframe,
     )
+    if as_dataframe:
+        base_metrics = base_metrics["Value"].to_dict()
+
+    trading_metrics = compute_trading_metrics(
+        equity_curve=result.equity_curve,
+        positions=result.positions,
+        trades=result.trades,
+        commission_bps=result.config.commission_bps,
+        slippage_bps=result.config.slippage_bps,
+    )
+
+    all_metrics = {**base_metrics, **trading_metrics}
+    if as_dataframe:
+        df = pd.DataFrame.from_dict(all_metrics, orient="index", columns=["Value"])
+        df.index.name = "Metric"
+        return df
+
+    return all_metrics
 
 def print_metrics_summary(
     metrics: dict[str, float] | PandasDataFrame,
@@ -127,6 +146,11 @@ def print_metrics_summary(
     drawdown_keys = [
         "max_drawdown", "avg_drawdown", "current_drawdown", "max_drawdown_duration"
     ]
+    trading_keys = [
+        "turnover_avg", "turnover_median", "turnover_max", "turnover_total",
+        "n_trade_days", "holdings_avg", "holdings_max", "hhi_avg", "hhi_max",
+        "cost_est_total", "cost_est_pct",
+    ]
     other_keys = ["n_periods"]
     # Print performance metrics
     print("\n  Performance Metrics:")
@@ -149,6 +173,16 @@ def print_metrics_summary(
             print(f"    {label:<30} {formatted_value:>20}")
     
     # Print other metrics
+    if any(key in metrics_dict for key in trading_keys):
+        print("\n  Trading Metrics:")
+        print("  " + "-" * 56)
+        for key in trading_keys:
+            if key in metrics_dict:
+                value = metrics_dict[key]
+                label = _format_metric_label(key)
+                formatted_value = _format_metric_value(key, value)
+                print(f"    {label:<30} {formatted_value:>20}")
+
     if any(key in metrics_dict for key in other_keys):
         print("\n  Other:")
         print("  " + "-" * 56)
@@ -176,20 +210,35 @@ def _format_metric_label(key: str) -> str:
         "current_drawdown": "Current Drawdown",
         "max_drawdown_duration": "Max DD Duration (days)",
         "n_periods": "Number of Periods",
+        "turnover_avg": "Turnover Avg",
+        "turnover_median": "Turnover Median",
+        "turnover_max": "Turnover Max",
+        "turnover_total": "Turnover Total",
+        "n_trade_days": "Trade Days",
+        "holdings_avg": "Holdings Avg",
+        "holdings_max": "Holdings Max",
+        "hhi_avg": "HHI Avg",
+        "hhi_max": "HHI Max",
+        "cost_est_total": "Cost Est Total",
+        "cost_est_pct": "Cost Est Pct",
     }
     return label_map.get(key, key.replace("_", " ").title())
 
 def _format_metric_value(key: str, value: float) -> str:
     """Format metric value for display."""
     # Percentage metrics
-    if key in ["total_return", "cagr", "annualized_vol", "win_rate",
-               "best_day", "worst_day", "max_drawdown", "avg_drawdown", "current_drawdown"]:
+    if key in [
+        "total_return", "cagr", "annualized_vol", "win_rate",
+        "best_day", "worst_day", "max_drawdown", "avg_drawdown", "current_drawdown",
+        "turnover_avg", "turnover_median", "turnover_max", "turnover_total",
+        "hhi_avg", "hhi_max", "cost_est_pct",
+    ]:
         return f"{value:>8.2%}"
     # Ratio metrics
     elif key in ["sharpe_ratio", "sortino_ratio", "calmar_ratio"]:
         return f"{value:>8.2f}"
     # Integer metrics
-    elif key in ["n_periods", "max_drawdown_duration"]:
+    elif key in ["n_periods", "max_drawdown_duration", "n_trade_days", "holdings_max"]:
         return f"{int(value):>8,d}"
     # Default: 2 decimal places
     else:

@@ -208,9 +208,9 @@ class BacktestConfig:
     price_field: PriceFieldType  # 执行价格 'open'/'close'/等 或 PriceField 枚举
     benchmark: str | None = None # 基准指数(如 "SPY")
 
-    max_turnover: float = 1.0
-    rebalance_threshold: float = 0.0
-    execution_delay_days: int = 0
+    max_turnover: float = 0.3   #最大可交易仓数
+    rebalance_threshold: float = 0.0 
+    execution_delay_days: int = 1
     
     def __post_init__(self) -> None:
         # Normalize dates into ISO strings

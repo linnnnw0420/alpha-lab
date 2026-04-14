@@ -57,13 +57,20 @@ def load_universe(
 
     Args / 参数:
         universe: UniverseConfig 或股票代码列表/元组
-        as_of: 参考日期(预留给未来动态股票池功能)
+        as_of: 参考日期(当 UniverseConfig.dynamic_by_price=True 时生效)
     
     Returns / 返回:
         股票代码字符串列表 / List of ticker strings
     """
     if isinstance(universe, UniverseConfig):
         tickers = get_universe_tickers(universe, as_of=as_of)
+        if universe.dynamic_by_price and as_of is not None:
+            tickers = _filter_universe_by_price(
+                tickers=tickers,
+                as_of=as_of,
+                field=universe.price_field,
+                min_valid_price=universe.min_valid_price,
+            )
     elif isinstance(universe, (list, tuple)):
         tickers = [str(t).strip() for t in universe if str(t).strip()]
     else:
@@ -253,7 +260,7 @@ def _align_to_calendar(
     prices: PandasDataFrame,
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
-    forward_fill_limit: int | None = None,
+    forward_fill_limit: int | None = 5,
 ) -> PandasDataFrame:
     """
     Align prices to full trading calendar and forward-fill missing dates.
@@ -313,8 +320,58 @@ def _get_trading_calendar(date_index: PandasDatetimeIndex) -> PandasDatetimeInde
     
     return _TRADING_CALENDAR_CACHE[cache_key]
 
+def _filter_universe_by_price(
+    tickers: list[Ticker],
+    as_of: DateLike,
+    field: PriceField,
+    min_valid_price: float = 0.0,
+) -> list[Ticker]:
+    """
+    Filter tickers by price availability at a specific date.
+    按指定日期的有效价格过滤股票池.
+    """
+    if not tickers:
+        return []
+
+    as_of_ts = parse_date(as_of)
+    paths = get_paths()
+
+    prices = load_csv_prices(
+        tickers=tickers,
+        start_date=as_of_ts,
+        end_date=as_of_ts,
+        field=field,
+        paths=paths,
+    )
+    if prices.empty:
+        logger.warning(f"No prices found for as_of={as_of_ts.date()}, returning original universe")
+        return tickers
+
+    row = prices.iloc[-1]
+    valid = row.notna() & (row > min_valid_price)
+    filtered = [t for t in tickers if bool(valid.get(t, False))]
+    if not filtered:
+        logger.warning(f"No tradable tickers at {as_of_ts.date()}, returning original universe")
+        return tickers
+
+    logger.debug(f"Filtered universe by price: {len(tickers)} -> {len(filtered)}")
+    return filtered
+
+def infer_tradable_mask(
+    prices: PandasDataFrame,
+    min_valid_price: float = 0.0,
+) -> PandasDataFrame:
+    """
+    Infer tradable mask from price availability.
+    用价格可用性推断可交易掩码.
+    """
+    if prices.empty:
+        return pd.DataFrame(index=prices.index, columns=prices.columns, dtype=bool)
+    return (prices.notna()) & (prices > min_valid_price)
+
 __all__ = [
     "load_universe",
     "load_prices",
     "load_returns",
+    "infer_tradable_mask",
 ]
