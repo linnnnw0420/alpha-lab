@@ -17,6 +17,7 @@ from alpha_lab.utils.typing import PandasSeries
 
 logger = get_logger(__name__)
 
+
 def compute_drawdown_series(equity_curve: PandasSeries) -> PandasSeries:
     """
     Compute drawdown series from equity curve.
@@ -32,7 +33,7 @@ def compute_drawdown_series(equity_curve: PandasSeries) -> PandasSeries:
     if equity_curve.empty:
         logger.warning("Empty equity curve")
         return pd.Series(dtype=float)
-    
+
     # Running maximum
     running_max = equity_curve.expanding().max()
 
@@ -43,6 +44,7 @@ def compute_drawdown_series(equity_curve: PandasSeries) -> PandasSeries:
     drawdown = drawdown.replace([np.inf, -np.inf], 0.0).fillna(0.0)
 
     return drawdown
+
 
 def compute_max_drawdown(equity_curve: PandasSeries) -> float:
     """
@@ -57,13 +59,14 @@ def compute_max_drawdown(equity_curve: PandasSeries) -> float:
     if equity_curve.empty:
         logger.warning("Empty equity curve")
         return 0.0
-    
+
     drawdown = compute_drawdown_series(equity_curve)
 
     # Max drawdown is the most negative value
     max_dd = abs(drawdown.min())
 
     return max_dd
+
 
 def compute_drawdown_metrics(equity_curve: PandasSeries) -> dict[str, float]:
     """
@@ -122,23 +125,24 @@ def _compute_max_drawdown_duration(drawdown: PandasSeries) -> int:
     """
     if drawdown.empty:
         return 0
-    
+
     # Identify drawdown periods (negative drawdown)
     in_dd = (drawdown < -1e-6).astype(int)
-    
+
     if in_dd.sum() == 0:
         return 0  # No drawdown periods
 
     # Find consecutive runs
     dd_groups = (in_dd != in_dd.shift()).cumsum()
     dd_runs = in_dd.groupby(dd_groups).sum()
-    
+
     # Filter to only drawdown runs (where sum > 0)
     dd_runs_positive = dd_runs[dd_runs > 0]
-    
+
     max_duration = int(dd_runs_positive.max()) if not dd_runs_positive.empty else 0
-    
+
     return max_duration
+
 
 def compute_calmar_ratio(
     equity_curve: PandasSeries,
@@ -154,21 +158,21 @@ def compute_calmar_ratio(
     Returns:
         Calmar ratio
 
-    Note:
-        v0 implementation - basic version.
+    Uses daily-equivalent CAGR when `freq="D"`.
     """
     from alpha_lab.metrics.performance import compute_cagr
     from alpha_lab.utils.math import safe_divide
 
     if equity_curve.empty:
         return 0.0
-    
+
     cagr = compute_cagr(equity_curve, freq)
     max_dd = compute_max_drawdown(equity_curve)
 
     calmar = safe_divide(cagr, max_dd, default=0.0)
 
     return calmar
+
 
 __all__ = [
     "compute_drawdown_series",

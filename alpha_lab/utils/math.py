@@ -3,10 +3,11 @@ from __future__ import annotations
 import math
 from typing import Any
 
-try: # optional
-    import numpy as np #type: ignore
-except ImportError: # pragma: no cover
+try:  # optional
+    import numpy as np  # type: ignore
+except ImportError:  # pragma: no cover
     np = None
+
 
 def safe_divide(a: float, b: float, default: float = 0.0, eps: float = 1e-12) -> float:
     """
@@ -24,6 +25,7 @@ def safe_divide(a: float, b: float, default: float = 0.0, eps: float = 1e-12) ->
 
     return a / b if abs(b) > eps else default
 
+
 def annualize_return(period_return: float, periods_per_year: float) -> float:
     """
     Convert per-period arithmetic return to anualized compounded return.
@@ -39,6 +41,7 @@ def annualize_return(period_return: float, periods_per_year: float) -> float:
     """
     return (1.0 + period_return) ** periods_per_year - 1.0
 
+
 def annualize_vol(vol: float, periods_per_year: float) -> float:
     """
     Annualize volatility (std of per-period returns).
@@ -48,17 +51,20 @@ def annualize_vol(vol: float, periods_per_year: float) -> float:
     root = math.sqrt(periods_per_year)
     return vol * root
 
+
 def to_log_return(r: float) -> float:
     """
     Convert arithmetic return to log return:
     """
     return math.log1p(r)
 
+
 def from_log_return(lr: float) -> float:
     """
     Convert log return back to arithmetic return exp(lr) - 1
     """
-    return math.expm1(lr) 
+    return math.expm1(lr)
+
 
 def np_to_array(x: Any) -> Any:
     """
@@ -67,6 +73,7 @@ def np_to_array(x: Any) -> Any:
     if np is None:
         return x
     return np.asarray(x)
+
 
 __all__ = [
     "safe_divide",

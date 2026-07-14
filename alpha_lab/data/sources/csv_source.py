@@ -14,16 +14,18 @@ CSV 数据源:从本地 CSV 文件加载价格数据.
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 import pandas as pd
 
 from alpha_lab.config.paths import Paths
+from alpha_lab.data.contracts import PriceDataContract, normalize_price_panel
+from alpha_lab.exceptions import DataContractError
 from alpha_lab.utils.logging import get_logger
 from alpha_lab.utils.typing import PandasDataFrame, PandasTimestamp, PriceField, Ticker
 
 logger = get_logger(__name__)
+
 
 def load_csv_prices(
     tickers: list[Ticker],
@@ -32,6 +34,8 @@ def load_csv_prices(
     field: PriceField,
     paths: Paths,
     csv_file: str | None = None,
+    contract: PriceDataContract | None = None,
+    chunksize: int = 100_000,
 ) -> PandasDataFrame:
     """
     Load prices from csv files.
@@ -50,7 +54,7 @@ def load_csv_prices(
         field: 价格字段 'open'/'high'/'low'/'close'/'vwap'
         paths: Paths 配置对象
         csv_file: 指定CSV文件名，None则按默认规则搜索
-    
+
     Returns / 返回:
         DataFrame: index=日期, columns=股票代码
     """
@@ -63,31 +67,78 @@ def load_csv_prices(
         csv_path = _find_csv_file(field, paths)
     logger.debug(f"Reading {csv_path}")
 
+    contract = contract or PriceDataContract()
     try:
-        df_raw = pd.read_csv(csv_path)
-        # 不区分大小写查找日期列 / Find date column with case-insensitive match
-        date_cols = [c for c in df_raw.columns if c.lower() == 'date']
-        if date_cols:
-            date_col = date_cols[0]
-            df_raw = df_raw.rename(columns={date_col: 'date'})
-            df_raw['date'] = pd.to_datetime(df_raw['date'])
+        header = pd.read_csv(csv_path, nrows=0).columns.tolist()
+    except Exception as exc:
+        raise DataContractError(f"Failed to inspect CSV {csv_path}: {exc}") from exc
+    date_columns = [column for column in header if str(column).lower() == "date"]
+    if not date_columns:
+        raise DataContractError(f"CSV must have a date column; found {header}")
+    date_column = date_columns[0]
+    ticker_columns = [column for column in header if str(column).lower() == "ticker"]
+
+    try:
+        if ticker_columns:
+            ticker_column = ticker_columns[0]
+            field_columns = [
+                column for column in header if str(column).lower() == str(field).lower()
+            ]
+            if not field_columns:
+                raise DataContractError(f"Long CSV is missing field {field!r}")
+            field_column = field_columns[0]
+            parts: list[pd.DataFrame] = []
+            for chunk in pd.read_csv(
+                csv_path,
+                usecols=[date_column, ticker_column, field_column],
+                chunksize=chunksize,
+            ):
+                chunk[ticker_column] = chunk[ticker_column].astype(str)
+                chunk = chunk[chunk[ticker_column].isin(tickers)]
+                if not chunk.empty:
+                    parts.append(chunk)
+            raw = (
+                pd.concat(parts, ignore_index=True)
+                if parts
+                else pd.DataFrame(columns=[date_column, ticker_column, field_column])
+            )
+            raw = raw.rename(
+                columns={date_column: "date", ticker_column: "ticker", field_column: str(field)}
+            )
+            raw["date"] = pd.to_datetime(raw["date"], errors="raise")
+            if raw.duplicated(["date", "ticker"]).any():
+                examples = raw.loc[
+                    raw.duplicated(["date", "ticker"], keep=False), ["date", "ticker"]
+                ]
+                raise DataContractError(
+                    f"Duplicate (date, ticker) rows: {examples.head().to_dict('records')}"
+                )
+            wide = raw.pivot(index="date", columns="ticker", values=str(field))
         else:
-            raise ValueError(f"CSV must have 'date' column, found: {list(df_raw.columns)}")
-    except Exception as e:
-        raise ValueError(f"Failed to read CSV: {e}") from e
-    
-    # 转换为宽格式 / Convert to wide format
-    df_wide = _convert_to_wide_format(df_raw, field)
+            available = {str(column): column for column in header}
+            selected = [available[ticker] for ticker in tickers if ticker in available]
+            raw = pd.read_csv(csv_path, usecols=[date_column, *selected])
+            raw = raw.rename(columns={date_column: "date"})
+            raw["date"] = pd.to_datetime(raw["date"], errors="raise")
+            wide = raw.set_index("date")
+    except DataContractError:
+        raise
+    except Exception as exc:
+        raise DataContractError(f"Failed to read CSV {csv_path}: {exc}") from exc
 
-    # 过滤日期范围和股票 / Filter date range and tickers
-    df_filtered = _filter_date_range(df_wide, start_date, end_date)
-    df_final = _filter_tickers(df_filtered, tickers)
+    return normalize_price_panel(
+        wide,
+        contract=contract,
+        start_date=start_date,
+        end_date=end_date,
+        tickers=tickers,
+    )
 
-    return df_final
 
 # -----------------------------------------------------------------------------
 # Helpers: file location / 辅助函数:文件定位
 # -----------------------------------------------------------------------------
+
 
 def _find_csv_file(field: PriceField, paths: Paths) -> Path:
     """
@@ -110,16 +161,18 @@ def _find_csv_file(field: PriceField, paths: Paths) -> Path:
     for path in search_paths:
         if path.exists():
             return path
-    
+
     raise FileNotFoundError(
-        f"No CSV file found for '{field}'. Searched:\n" + 
-        "\n".join(f" - {p}" for p in search_paths) + 
-        f"\n\nPlace data in: {paths.data_raw_dir}"
+        f"No CSV file found for '{field}'. Searched:\n"
+        + "\n".join(f" - {p}" for p in search_paths)
+        + f"\n\nPlace data in: {paths.data_raw_dir}"
     )
+
 
 # -----------------------------------------------------------------------------
 # Helpers: format conversion / 辅助函数:格式转换
 # -----------------------------------------------------------------------------
+
 
 def _convert_to_wide_format(
     df: PandasDataFrame,
@@ -135,7 +188,7 @@ def _convert_to_wide_format(
     """
     if "date" not in df.columns:
         raise ValueError("CSV must have 'date' column")
-    
+
     # 已经是宽格式(没有 'ticker' 列)/ Already wide (no 'ticker' column)
     if "ticker" not in df.columns:
         df_wide = df.set_index("date")
@@ -143,7 +196,7 @@ def _convert_to_wide_format(
             raise ValueError("'date' column not parseable as datetime")
         df_wide.index.name = "date"
         return df_wide
-    
+
     # 长格式:需要 pivot / Long format: pivot
     if field not in df.columns:
         raise ValueError(f"Long format CSV missing field '{field}'")
@@ -154,10 +207,12 @@ def _convert_to_wide_format(
         return df_wide
     except Exception as e:
         raise ValueError(f"Failed to pivot: {e}") from e
-    
+
+
 # -----------------------------------------------------------------------------
 # Helpers: filtering / 辅助函数:过滤
 # -----------------------------------------------------------------------------
+
 
 def _filter_date_range(
     df: PandasDataFrame,
@@ -170,7 +225,7 @@ def _filter_date_range(
     """
     if not isinstance(df.index, pd.DatetimeIndex):
         raise TypeError("DataFrame must have DatetimeIndex")
-    
+
     df_dates = pd.DatetimeIndex(df.index).normalize()
     mask = (df_dates >= start_date) & (df_dates <= end_date)
     df_filtered = df.loc[mask].copy()
@@ -180,8 +235,9 @@ def _filter_date_range(
             f"No data in range {start_date.date()} to {end_date.date()}. "
             f"Available: {df.index.min().date()} to {df.index.max().date()}"
         )
-    
+
     return df_filtered
+
 
 def _filter_tickers(
     df: PandasDataFrame,
@@ -196,7 +252,7 @@ def _filter_tickers(
 
     found = requested & available
     missing = requested - available
-    
+
     if missing:
         logger.debug(f"Tickers not in CSV: {sorted(missing)[:10]}")
 
@@ -205,7 +261,8 @@ def _filter_tickers(
     if not found_ordered:
         logger.warning("No requested tickers found in CSV")
         return pd.DataFrame(index=df.index, columns=tickers, dtype=float)
-    
+
     return df[found_ordered].copy()
+
 
 __all__ = ["load_csv_prices"]

@@ -1,4 +1,3 @@
-
 """
 Data loader: central interface for loading price/returns data.
 数据加载器:加载价格/收益数据的核心接口.
@@ -16,15 +15,21 @@ Key functions / 核心函数:
 
 from __future__ import annotations
 
-import logging
+from pathlib import Path
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 
-from alpha_lab.config import get_paths, UniverseConfig, get_universe as get_universe_tickers
-from alpha_lab.config.paths import Paths
+from alpha_lab.config import UniverseConfig, get_paths
+from alpha_lab.config import get_universe as get_universe_tickers
+from alpha_lab.data.cache import cache_key, read_panel_cache, write_panel_cache
+from alpha_lab.data.contracts import PriceDataContract, fingerprint_frame, normalize_price_panel
+from alpha_lab.data.sampling import UniverseSelection, sample_universe
+from alpha_lab.data.sources.base import DataSource
 from alpha_lab.data.sources.csv_source import load_csv_prices
-from alpha_lab.utils.dates import parse_date, align_to_trading_day
+from alpha_lab.data.sources.parquet_source import load_parquet_prices
+from alpha_lab.utils.dates import parse_date
 from alpha_lab.utils.logging import get_logger
 from alpha_lab.utils.typing import (
     DateLike,
@@ -47,6 +52,7 @@ _TRADING_CALENDAR_CACHE: dict[str, PandasDatetimeIndex] = {}
 # Public API / 公共 API
 # -----------------------------------------------------------------------------
 
+
 def load_universe(
     universe: UniverseConfig | list[Ticker] | tuple[Ticker, ...],
     as_of: DateLike | None = None,
@@ -58,7 +64,7 @@ def load_universe(
     Args / 参数:
         universe: UniverseConfig 或股票代码列表/元组
         as_of: 参考日期(当 UniverseConfig.dynamic_by_price=True 时生效)
-    
+
     Returns / 返回:
         股票代码字符串列表 / List of ticker strings
     """
@@ -80,26 +86,31 @@ def load_universe(
 
     if not tickers:
         raise ValueError("Universe cannot be empty")
-    
+
     # Validate ticker format
     for ticker in tickers:
         if not ticker or not isinstance(ticker, str):
             raise ValueError(f"Invalid ticker: {ticker!r}")
         if len(ticker) > 20:
             raise ValueError(f"Ticker too long: {ticker!r}")
-        
+
     logger.debug(f"Loaded universe: {len(tickers)} tickers")
     return tickers
+
 
 def load_prices(
     universe: UniverseConfig | list[Ticker] | tuple[Ticker, ...],
     start_date: DateLike,
     end_date: DateLike,
     field: PriceField = "close",
-    source: Literal["csv", "parquet"] = "csv",
+    source: Literal["csv", "parquet"] | DataSource = "csv",
     align_dates: bool = True,
     forward_fill_limit: int | None = 5,
     csv_file: str | None = None,
+    parquet_file: str | None = None,
+    contract: PriceDataContract | None = None,
+    use_cache: bool = False,
+    cache_dir: Path | str | None = None,
 ) -> PandasDataFrame:
     """
     Load price panel (date x asset).
@@ -110,7 +121,7 @@ def load_prices(
     2. 从数据源加载原始价格 / Load raw prices from source
     3. 对齐到交易日历并前向填充缺失值 / Align to calendar & forward-fill
 
-    Args / 参数: 
+    Args / 参数:
         universe: 股票池配置或股票列表 / UniverseConfig or list of tickers
         start_date: 开始日期(包含)/ start date (inclusive)
         end_date: 结束日期(包含)/ end date (inclusive)
@@ -119,7 +130,7 @@ def load_prices(
         align_dates: 是否对齐到交易日历并前向填充 / align to trading calendar & forward-fill
         forward_fill_limit: 最大前向填充天数 (None=无限制) / max days to ffill
         csv_file: 指定CSV文件名 (如 'nasdaq_50_stocks_2023.csv')，None则按默认规则搜索
-    
+
     Returns / 返回:
         DataFrame: index=date, columns=tickers, values=prices
         价格矩阵,行索引=日期,列=股票代码,值=价格
@@ -130,21 +141,53 @@ def load_prices(
     end_ts = parse_date(end_date)
 
     if start_ts > end_ts:
-        raise ValueError(f"start_date must be <= end_date")
-    
+        raise ValueError("start_date must be <= end_date")
+
     valid_fields = {"open", "high", "low", "close", "vwap"}
     if field not in valid_fields:
         raise ValueError(f"field must be one of {valid_fields}, got {field!r}")
-    
+
     logger.info(
-        f"Loading {field} prices: {len(tickers)} tickers, "
-        f"{start_ts.date()} to {end_ts.date()}"
+        f"Loading {field} prices: {len(tickers)} tickers, {start_ts.date()} to {end_ts.date()}"
     )
 
     # Load from source
     paths = get_paths()
 
-    if source == "csv":
+    missing = "ffill" if align_dates else "preserve"
+    effective_contract = contract or PriceDataContract(
+        missing=missing, forward_fill_limit=forward_fill_limit
+    )
+    cache_token: str | None = None
+    cache_hit = False
+    resolved_cache_dir = Path(cache_dir) if cache_dir is not None else paths.cache_dir / "prices"
+    if isinstance(source, str) and source == "csv" and use_cache and csv_file is not None:
+        source_path = paths.data_raw_dir / csv_file
+        cache_token = cache_key(
+            source_path,
+            tickers=tickers,
+            start_date=str(start_ts.date()),
+            end_date=str(end_ts.date()),
+            field=field,
+            contract=effective_contract,
+        )
+        cached = read_panel_cache(resolved_cache_dir, cache_token)
+        if cached is not None:
+            prices_raw = cached
+            cache_hit = True
+        else:
+            prices_raw = load_csv_prices(
+                tickers=tickers,
+                start_date=start_ts,
+                end_date=end_ts,
+                field=field,
+                paths=paths,
+                csv_file=csv_file,
+                contract=effective_contract,
+            )
+    elif not isinstance(source, str):
+        prices_raw = source.load_prices(tickers, start_ts, end_ts, field)
+    elif source == "csv":
         prices_raw = load_csv_prices(
             tickers=tickers,
             start_date=start_ts,
@@ -152,9 +195,26 @@ def load_prices(
             field=field,
             paths=paths,
             csv_file=csv_file,
+            contract=effective_contract,
         )
     elif source == "parquet":
-        raise NotImplementedError("Parquet source not yet implemented")
+        if parquet_file is None:
+            candidates = [f"{field}.parquet", f"prices_{field}.parquet", "prices.parquet"]
+            existing = [
+                paths.data_raw_dir / candidate
+                for candidate in candidates
+                if (paths.data_raw_dir / candidate).exists()
+            ]
+            if not existing:
+                raise FileNotFoundError(
+                    "No Parquet file found; pass parquet_file=... or place one in data/raw"
+                )
+            parquet_path = existing[0]
+        else:
+            parquet_path = Path(parquet_file)
+            if not parquet_path.is_absolute():
+                parquet_path = paths.data_raw_dir / parquet_path
+        prices_raw = load_parquet_prices(parquet_path, tickers, start_ts, end_ts, field)
     else:
         raise ValueError(f"Unknown source: {source!r}")
 
@@ -166,19 +226,16 @@ def load_prices(
             columns=tickers,
             dtype=float,
         )
-    
-    if not isinstance(prices_raw.index, pd.DatetimeIndex):
-        raise TypeError("Price data must have DatetimeIndex")
-    
-    # Align to calendar if requested
-    if align_dates:
-        prices_aligned = _align_to_calendar(
-            prices_raw, start_ts, end_ts, forward_fill_limit
-        )
-    else:
-        prices_aligned = prices_raw
-    
-    # Ensure all tickers present (fill with NaN if missing) 
+
+    prices_aligned = normalize_price_panel(
+        prices_raw,
+        contract=effective_contract,
+        start_date=start_ts,
+        end_date=end_ts,
+        tickers=tickers,
+    )
+
+    # Ensure all tickers present (fill with NaN if missing)
     missing_tickers = set(tickers) - set(prices_aligned.columns)
     if missing_tickers:
         logger.warning(f"Missing {len(missing_tickers)} tickers")
@@ -187,9 +244,64 @@ def load_prices(
 
     # Reorder to match requested universe
     prices_final = prices_aligned[tickers].copy()
-    
+    if cache_token is not None and not cache_hit:
+        write_panel_cache(prices_final, resolved_cache_dir, cache_token)
+
     logger.info(f"Loaded: {len(prices_final)} days x {len(prices_final.columns)} assets")
     return prices_final
+
+
+def load_sampled_prices(
+    universe: UniverseConfig | list[Ticker] | tuple[Ticker, ...],
+    start_date: DateLike,
+    end_date: DateLike,
+    *,
+    sample_size: int,
+    seed: int = 42,
+    min_observations: int = 1,
+    min_coverage: float = 0.0,
+    require_start: bool = False,
+    require_end: bool = False,
+    **load_kwargs,
+) -> tuple[PandasDataFrame, UniverseSelection]:
+    """Load candidates and choose one reproducible fixed universe for a run."""
+    candidates = load_universe(universe)
+    if min_observations <= 1 and min_coverage == 0.0 and not require_start and not require_end:
+        if sample_size > len(candidates):
+            from alpha_lab.exceptions import ConfigurationError
+
+            raise ConfigurationError(
+                f"sample_size={sample_size} exceeds {len(candidates)} candidate tickers"
+            )
+        positions = np.sort(
+            np.random.default_rng(seed).choice(len(candidates), size=sample_size, replace=False)
+        )
+        selected = tuple(candidates[position] for position in positions)
+        prices = load_prices(selected, start_date, end_date, **load_kwargs)
+        record = UniverseSelection(
+            candidates=tuple(candidates),
+            selected=selected,
+            excluded={},
+            seed=seed,
+            sample_size=sample_size,
+            min_observations=min_observations,
+            min_coverage=min_coverage,
+            require_start=require_start,
+            require_end=require_end,
+            data_fingerprint=fingerprint_frame(prices),
+        )
+        return prices, record
+    prices = load_prices(universe, start_date, end_date, **load_kwargs)
+    return sample_universe(
+        prices,
+        sample_size,
+        seed=seed,
+        min_observations=min_observations,
+        min_coverage=min_coverage,
+        require_start=require_start,
+        require_end=require_end,
+    )
+
 
 def load_returns(
     prices: PandasDataFrame | None = None,
@@ -233,7 +345,7 @@ def load_returns(
 
     if periods < 1:
         raise ValueError(f"periods must be >= 1, got {periods}")
-    
+
     if method not in {"simple", "log"}:
         raise ValueError(f"method must be 'simple or 'log', got {method!r}")
 
@@ -242,8 +354,9 @@ def load_returns(
     # Compute returns
     if method == "simple":
         returns = prices.pct_change(periods=periods)
-    else: # log
+    else:  # log
         import numpy as np
+
         returns = pd.DataFrame(
             np.log(prices / prices.shift(periods)),
             index=prices.index,
@@ -252,9 +365,11 @@ def load_returns(
 
     return returns
 
+
 # -----------------------------------------------------------------------------
 # Internal helpers / 内部辅助函数
 # -----------------------------------------------------------------------------
+
 
 def _align_to_calendar(
     prices: PandasDataFrame,
@@ -285,7 +400,7 @@ def _align_to_calendar(
     calendar_subset = calendar[(calendar >= start_date) & (calendar <= end_date)]
 
     if calendar_subset.empty:
-        logger.warning(f"No trading days in range")
+        logger.warning("No trading days in range")
         return pd.DataFrame(
             index=pd.DatetimeIndex([], name="date"),
             columns=prices.columns,
@@ -299,8 +414,9 @@ def _align_to_calendar(
         prices_aligned = prices_aligned.ffill(limit=forward_fill_limit)
     else:
         prices_aligned = prices_aligned.ffill()
-    
+
     return prices_aligned
+
 
 def _get_trading_calendar(date_index: PandasDatetimeIndex) -> PandasDatetimeIndex:
     """
@@ -317,8 +433,9 @@ def _get_trading_calendar(date_index: PandasDatetimeIndex) -> PandasDatetimeInde
         calendar = pd.DatetimeIndex(sorted(date_index.unique()))
         _TRADING_CALENDAR_CACHE[cache_key] = calendar
         logger.debug(f"Cached calendar: {len(calendar)} days")
-    
+
     return _TRADING_CALENDAR_CACHE[cache_key]
+
 
 def _filter_universe_by_price(
     tickers: list[Ticker],
@@ -357,6 +474,7 @@ def _filter_universe_by_price(
     logger.debug(f"Filtered universe by price: {len(tickers)} -> {len(filtered)}")
     return filtered
 
+
 def infer_tradable_mask(
     prices: PandasDataFrame,
     min_valid_price: float = 0.0,
@@ -369,9 +487,11 @@ def infer_tradable_mask(
         return pd.DataFrame(index=prices.index, columns=prices.columns, dtype=bool)
     return (prices.notna()) & (prices > min_valid_price)
 
+
 __all__ = [
     "load_universe",
     "load_prices",
     "load_returns",
+    "load_sampled_prices",
     "infer_tradable_mask",
 ]

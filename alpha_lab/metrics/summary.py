@@ -11,13 +11,14 @@ from __future__ import annotations
 import pandas as pd
 
 from alpha_lab.backtest.engine import BacktestResult
+from alpha_lab.metrics.drawdown import compute_drawdown_metrics
 from alpha_lab.metrics.performance import compute_performance_metrics
 from alpha_lab.metrics.trading import compute_trading_metrics
-from alpha_lab.metrics.drawdown import compute_drawdown_metrics
 from alpha_lab.utils.logging import get_logger
-from alpha_lab.utils.typing import PandasSeries, PandasDataFrame, RebalanceFreq
+from alpha_lab.utils.typing import PandasDataFrame, PandasSeries, RebalanceFreq
 
 logger = get_logger(__name__)
+
 
 def generate_metrics_summary(
     equity_curve: PandasSeries,
@@ -42,7 +43,7 @@ def generate_metrics_summary(
     if equity_curve.empty:
         logger.warning("Empty equity curve")
         return pd.DataFrame() if as_dataframe else {}
-    
+
     logger.info("Generating metrics summary")
 
     # Compute returns if not provided
@@ -68,8 +69,9 @@ def generate_metrics_summary(
         df = pd.DataFrame.from_dict(all_metrics, orient="index", columns=["Value"])
         df.index.name = "Metric"
         return df
-    
+
     return all_metrics
+
 
 def generate_backtest_summary(
     result: BacktestResult,
@@ -91,7 +93,7 @@ def generate_backtest_summary(
         equity_curve=result.equity_curve,
         returns=result.returns,
         freq="D",  # returns 是日频,不是 rebalance 频率
-        risk_free_rate=0.0,  # v0: assume 0, can be added to config in v1
+        risk_free_rate=0.0,
         as_dataframe=as_dataframe,
     )
     if as_dataframe:
@@ -113,6 +115,7 @@ def generate_backtest_summary(
 
     return all_metrics
 
+
 def print_metrics_summary(
     metrics: dict[str, float] | PandasDataFrame,
     title: str = "Performance Summary",
@@ -132,7 +135,7 @@ def print_metrics_summary(
         metrics_dict = metrics.to_dict()["Value"]
     else:
         metrics_dict = metrics
-    
+
     if not metrics_dict:
         print("  No metrics available")
         print("=" * 60 + "\n")
@@ -140,16 +143,27 @@ def print_metrics_summary(
 
     # Group metrics by category
     performance_keys = [
-        "total_return", "cagr", "annualized_vol", "sharpe_ratio",
-        "win_rate", "best_day", "worst_day"
+        "total_return",
+        "cagr",
+        "annualized_vol",
+        "sharpe_ratio",
+        "win_rate",
+        "best_day",
+        "worst_day",
     ]
-    drawdown_keys = [
-        "max_drawdown", "avg_drawdown", "current_drawdown", "max_drawdown_duration"
-    ]
+    drawdown_keys = ["max_drawdown", "avg_drawdown", "current_drawdown", "max_drawdown_duration"]
     trading_keys = [
-        "turnover_avg", "turnover_median", "turnover_max", "turnover_total",
-        "n_trade_days", "holdings_avg", "holdings_max", "hhi_avg", "hhi_max",
-        "cost_est_total", "cost_est_pct",
+        "turnover_avg",
+        "turnover_median",
+        "turnover_max",
+        "turnover_total",
+        "n_trade_days",
+        "holdings_avg",
+        "holdings_max",
+        "hhi_avg",
+        "hhi_max",
+        "cost_est_total",
+        "cost_est_pct",
     ]
     other_keys = ["n_periods"]
     # Print performance metrics
@@ -171,7 +185,7 @@ def print_metrics_summary(
             label = _format_metric_label(key)
             formatted_value = _format_metric_value(key, value)
             print(f"    {label:<30} {formatted_value:>20}")
-    
+
     # Print other metrics
     if any(key in metrics_dict for key in trading_keys):
         print("\n  Trading Metrics:")
@@ -194,6 +208,7 @@ def print_metrics_summary(
                 print(f"    {label:<30} {formatted_value:>20}")
 
     print("\n" + "=" * 60 + "\n")
+
 
 def _format_metric_label(key: str) -> str:
     """Format metric key into readable label."""
@@ -224,14 +239,27 @@ def _format_metric_label(key: str) -> str:
     }
     return label_map.get(key, key.replace("_", " ").title())
 
+
 def _format_metric_value(key: str, value: float) -> str:
     """Format metric value for display."""
     # Percentage metrics
     if key in [
-        "total_return", "cagr", "annualized_vol", "win_rate",
-        "best_day", "worst_day", "max_drawdown", "avg_drawdown", "current_drawdown",
-        "turnover_avg", "turnover_median", "turnover_max", "turnover_total",
-        "hhi_avg", "hhi_max", "cost_est_pct",
+        "total_return",
+        "cagr",
+        "annualized_vol",
+        "win_rate",
+        "best_day",
+        "worst_day",
+        "max_drawdown",
+        "avg_drawdown",
+        "current_drawdown",
+        "turnover_avg",
+        "turnover_median",
+        "turnover_max",
+        "turnover_total",
+        "hhi_avg",
+        "hhi_max",
+        "cost_est_pct",
     ]:
         return f"{value:>8.2%}"
     # Ratio metrics
@@ -243,7 +271,8 @@ def _format_metric_value(key: str, value: float) -> str:
     # Default: 2 decimal places
     else:
         return f"{value:>8.2f}"
-    
+
+
 def compare_strategies(
     results: dict[str, BacktestResult],
     metrics_to_compare: list[str] | None = None,
@@ -258,8 +287,7 @@ def compare_strategies(
     Returns:
         DataFrame with strategies as columns, metrics as rows
 
-    Note:
-        v0 implementation - basic comparison table.
+    Missing requested metrics are omitted from the comparison.
     """
     if not results:
         logger.warning("No results to compare")
@@ -282,6 +310,7 @@ def compare_strategies(
         comparison_df = comparison_df.loc[available]
 
     return comparison_df
+
 
 __all__ = [
     "generate_metrics_summary",

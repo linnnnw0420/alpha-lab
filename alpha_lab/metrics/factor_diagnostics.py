@@ -9,6 +9,7 @@ Key functions / 核心函数:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
@@ -19,6 +20,7 @@ from alpha_lab.utils.math import safe_divide
 from alpha_lab.utils.typing import PandasDataFrame, PandasSeries
 
 logger = get_logger(__name__)
+
 
 def compute_ic_series(
     factor: PandasDataFrame,
@@ -58,6 +60,8 @@ def compute_ic_series(
         mask = f.notna() & r.notna() & np.isfinite(f) & np.isfinite(r)
         if int(mask.sum()) < min_obs:
             continue
+        if f[mask].nunique() < 2 or r[mask].nunique() < 2:
+            continue
         ic = f[mask].corr(r[mask], method=method)
         if pd.isna(ic):
             continue
@@ -68,6 +72,7 @@ def compute_ic_series(
         return pd.Series(dtype=float)
 
     return pd.Series(ic_values, index=pd.DatetimeIndex(ic_dates), name="ic")
+
 
 def compute_forward_returns(
     prices: PandasDataFrame,
@@ -92,6 +97,7 @@ def compute_forward_returns(
     end = prices.shift(-(delay + horizon))
     fwd = (end / start) - 1.0
     return fwd
+
 
 def compute_ic_stats(ic_series: PandasSeries) -> dict[str, float]:
     """
@@ -118,4 +124,131 @@ def compute_ic_stats(ic_series: PandasSeries) -> dict[str, float]:
         "ic_n": float(len(ic_clean)),
     }
 
-__all__ = ["compute_ic_series", "compute_forward_returns", "compute_ic_stats"]
+
+def compute_factor_coverage(factor: PandasDataFrame) -> PandasDataFrame:
+    """Per-date valid coverage and cross-sectional dispersion."""
+    finite = factor.replace([np.inf, -np.inf], np.nan)
+    return pd.DataFrame(
+        {
+            "coverage": finite.notna().mean(axis=1),
+            "n_valid": finite.notna().sum(axis=1).astype(float),
+            "dispersion": finite.std(axis=1, ddof=1),
+        },
+        index=factor.index,
+    )
+
+
+def compute_quantile_returns(
+    factor: PandasDataFrame,
+    forward_returns: PandasDataFrame,
+    *,
+    quantiles: int = 5,
+    min_obs: int | None = None,
+) -> PandasDataFrame:
+    """Mean forward return for equal-count cross-sectional factor buckets."""
+    if quantiles < 2:
+        raise ValueError("quantiles must be >= 2")
+    minimum = min_obs or quantiles
+    dates = factor.index.intersection(forward_returns.index)
+    assets = factor.columns.intersection(forward_returns.columns)
+    records: list[pd.Series] = []
+    for date in dates:
+        pair = (
+            pd.DataFrame(
+                {"factor": factor.loc[date, assets], "return": forward_returns.loc[date, assets]}
+            )
+            .replace([np.inf, -np.inf], np.nan)
+            .dropna()
+        )
+        if len(pair) < minimum:
+            continue
+        ranks = pair["factor"].rank(method="first")
+        bucket = pd.qcut(ranks, q=min(quantiles, len(pair)), labels=False) + 1
+        row = pair.groupby(bucket)["return"].mean()
+        row.name = date
+        records.append(row)
+    if not records:
+        return pd.DataFrame(columns=range(1, quantiles + 1), dtype=float)
+    result = pd.DataFrame(records).reindex(columns=range(1, quantiles + 1))
+    result.columns.name = "quantile"
+    return result
+
+
+def compute_factor_turnover(factor: PandasDataFrame, top_quantile: float = 0.2) -> PandasSeries:
+    """Fraction of the previous top bucket replaced on each date."""
+    if not 0 < top_quantile <= 1:
+        raise ValueError("top_quantile must be in (0, 1]")
+    memberships: list[set[str]] = []
+    dates: list[pd.Timestamp] = []
+    for date, row in factor.iterrows():
+        valid = row.replace([np.inf, -np.inf], np.nan).dropna()
+        count = max(1, int(np.ceil(len(valid) * top_quantile))) if len(valid) else 0
+        memberships.append(set(valid.nlargest(count).index) if count else set())
+        dates.append(pd.Timestamp(date))
+    values = [0.0]
+    for previous, current in zip(memberships, memberships[1:], strict=False):
+        values.append(1.0 if not previous else 1.0 - len(previous & current) / len(previous))
+    return pd.Series(values, index=pd.DatetimeIndex(dates), name="factor_turnover")
+
+
+def compute_rank_stability(factor: PandasDataFrame) -> PandasSeries:
+    """Spearman correlation between consecutive cross-sectional ranks."""
+    ranks = factor.rank(axis=1, pct=True)
+    values = [np.nan]
+    for position in range(1, len(ranks)):
+        values.append(ranks.iloc[position - 1].corr(ranks.iloc[position], method="spearman"))
+    return pd.Series(values, index=factor.index, name="rank_stability")
+
+
+@dataclass
+class FactorTearSheet:
+    ic_series: PandasSeries
+    ic_stats: dict[str, float]
+    quantile_returns: PandasDataFrame
+    cumulative_spread: PandasSeries
+    coverage: PandasDataFrame
+    turnover: PandasSeries
+    rank_stability: PandasSeries
+
+
+def generate_factor_tear_sheet(
+    factor: PandasDataFrame,
+    forward_returns: PandasDataFrame,
+    *,
+    quantiles: int = 5,
+    method: Literal["spearman", "pearson"] = "spearman",
+    min_obs: int = 5,
+) -> FactorTearSheet:
+    ic = compute_ic_series(factor, forward_returns, method=method, min_obs=min_obs)
+    quantile = compute_quantile_returns(
+        factor, forward_returns, quantiles=quantiles, min_obs=min_obs
+    )
+    spread = (
+        quantile[quantiles] - quantile[1]
+        if {1, quantiles} <= set(quantile.columns)
+        else pd.Series(dtype=float)
+    )
+    cumulative = (1.0 + spread.fillna(0.0)).cumprod() - 1.0
+    cumulative.name = "cumulative_spread"
+    return FactorTearSheet(
+        ic_series=ic,
+        ic_stats=compute_ic_stats(ic),
+        quantile_returns=quantile,
+        cumulative_spread=cumulative,
+        coverage=compute_factor_coverage(factor),
+        turnover=compute_factor_turnover(factor, top_quantile=1 / quantiles),
+        rank_stability=compute_rank_stability(factor),
+    )
+
+
+__all__ = [
+    "FactorTearSheet",
+    "compute_factor_coverage",
+    "compute_factor_turnover",
+    "compute_forward_returns",
+    "compute_ic_series",
+    "compute_ic_stats",
+    "compute_quantile_returns",
+    "compute_rank_stability",
+    "generate_factor_tear_sheet",
+]

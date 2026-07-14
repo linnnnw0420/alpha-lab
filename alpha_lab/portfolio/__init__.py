@@ -11,10 +11,10 @@ from __future__ import annotations
 
 from alpha_lab.portfolio.rebalance import generate_rebalance_schedule
 from alpha_lab.portfolio.weighting import (
+    apply_weight_constraints,
+    proportional_weights,
     top_k_long_only,
     top_k_long_short,
-    proportional_weights,
-    apply_weight_constraints,
 )
 
 __all__ = [

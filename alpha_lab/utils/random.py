@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import random
-from typing import Any
 
-try: # optional
-    import numpy as np # type: ignore
-except ImportError: # pragma: no cover
-    np = None # type: ignore[assignment]
+try:  # optional
+    import numpy as np  # type: ignore
+except ImportError:  # pragma: no cover
+    np = None  # type: ignore[assignment]
 
 try:
-    import torch # type: ignore
-except ImportError: # pragma: no cover
-    torch = None # type: ignore[assignment]
+    import torch  # type: ignore
+except ImportError:  # pragma: no cover
+    torch = None  # type: ignore[assignment]
 
 
 def set_global_seed(seed: int) -> None:
@@ -28,8 +27,6 @@ def set_global_seed(seed: int) -> None:
     if np is not None:
         np.random.seed(seed)
 
-    
-
 
 def new_numpy_random_generator(seed: int | None = None):
     """
@@ -44,5 +41,6 @@ def new_numpy_random_generator(seed: int | None = None):
     if np is None:
         raise ImportError("numpy is required for new_numpy_random_generator()")
     return np.random.default_rng(seed)
+
 
 __all__ = ["set_global_seed", "new_numpy_random_generator"]

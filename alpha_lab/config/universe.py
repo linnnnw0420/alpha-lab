@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from typing import Sequence
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass, replace
 
 from alpha_lab.utils.typing import DateLike, PriceField, Ticker
+
 
 @dataclass(frozen=True, slots=True)
 class UniverseConfig:
@@ -12,14 +13,15 @@ class UniverseConfig:
     (by date, metadata, etc.). Optional dynamic_by_price uses price availability
     to filter tickers when as_of is provided.
     """
+
     name: str
     tickers: tuple[Ticker, ...]
-    min_mkt_cap: float | None = None               # optional market-cap floor
-    min_avg_turnover: float | None = None          # optional liquidity floor
-    exclude_st: bool = True                        # placeholder for future ST filter
-    dynamic_by_price: bool = False                 # filter by price availability when as_of is provided
-    price_field: PriceField = "close"              # price field for dynamic filtering
-    min_valid_price: float = 0.0                   # minimum price to treat as tradable
+    min_mkt_cap: float | None = None  # optional market-cap floor
+    min_avg_turnover: float | None = None  # optional liquidity floor
+    exclude_st: bool = True  # placeholder for future ST filter
+    dynamic_by_price: bool = False  # filter by price availability when as_of is provided
+    price_field: PriceField = "close"  # price field for dynamic filtering
+    min_valid_price: float = 0.0  # minimum price to treat as tradable
 
     def __post_init__(self) -> None:
         if not self.tickers:
@@ -36,19 +38,25 @@ class UniverseConfig:
             raise ValueError("min_valid_price must be >= 0")
         if self.price_field not in {"open", "high", "low", "close", "vwap"}:
             raise ValueError(f"price_field must be a valid field, got {self.price_field!r}")
-        
+
     def with_updates(self, **kwargs) -> UniverseConfig:
         """Return a new config with updated fields (re-validates)."""
         return replace(self, **kwargs)
-    
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
 def _as_ticker_tuple(values: Sequence[str]) -> tuple[Ticker, ...]:
     return tuple(str(v).strip() for v in values if str(v).strip())
+
 
 UNIVERSE_DEMO = UniverseConfig(
     name="DEMO_TOPS_US",
     tickers=_as_ticker_tuple(["AAPL", "MSFT", "GOOGL", "AMZN", "META"]),
     exclude_st=False,
 )
+
 
 def get_universe(config: UniverseConfig, as_of: DateLike | None = None) -> list[Ticker]:
     """
@@ -57,5 +65,6 @@ def get_universe(config: UniverseConfig, as_of: DateLike | None = None) -> list[
     """
     # NOTE: as_of is reserved for future dynamic rules (index membership, listing status, etc.)
     return list(config.tickers)
+
 
 __all__ = ["UniverseConfig", "UNIVERSE_DEMO", "get_universe"]

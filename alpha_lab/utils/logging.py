@@ -27,7 +27,7 @@ def setup_logging(
     global _SETUP_DONE
     if _SETUP_DONE:
         return
-    
+
     if log_format is None:
         log_format = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 
@@ -36,10 +36,11 @@ def setup_logging(
         format=log_format,
         datefmt="%Y-%m-%d %H:%M:%S",
         stream=sys.stdout,
-        force=True, #override any existing config
+        force=True,  # override any existing config
     )
 
     _SETUP_DONE = True
+
 
 def get_logger(name: str | None = None) -> logging.Logger:
     """
@@ -52,8 +53,9 @@ def get_logger(name: str | None = None) -> logging.Logger:
         A Logger instance
     """
     if not _SETUP_DONE:
-        setup_logging() # auto-setup with defaults
-    
+        setup_logging()  # auto-setup with defaults
+
     return logging.getLogger(name)
+
 
 __all__ = ["setup_logging", "get_logger"]

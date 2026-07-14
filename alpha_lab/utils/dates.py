@@ -20,7 +20,7 @@ from alpha_lab.utils.typing import DateLike, PandasDatetimeIndex, PandasTimestam
 try:
     import pandas as pd
 except ImportError:
-    pd = None # type: ignore[assignment]
+    pd = None  # type: ignore[assignment]
 
 # -----------------------------------------------------------------------------
 # Frequency <-> annualization factor mapping
@@ -28,10 +28,11 @@ except ImportError:
 # -----------------------------------------------------------------------------
 
 _ANNUALIZATION_FACTORS: dict[str, float] = {
-    "D": 252.0, # 每年交易日数 / trading days per year
+    "D": 252.0,  # 每年交易日数 / trading days per year
     "W": 52.0,  # 每年周数 / weeks per year
     "M": 12.0,  # 每年月数 / months per year
 }
+
 
 def annualization_factor(freq: RebalanceFreq) -> float:
     """
@@ -42,22 +43,26 @@ def annualization_factor(freq: RebalanceFreq) -> float:
         - 日波动率  ->  年化波动率: 日波动率 × √252
         - 月收益率  ->  年化收益率: 月收益率 × 12
 
-    Args / 参数: 
+    Args / 参数:
         freq: 'D' (每日), 'W' (每周), 'M' (每月)
 
     Returns / 返回:
         每年的周期数 (日=252, 周=52, 月=12)
-    
+
     Raises:
         ValueError: 如果 freq 不被识别
     """
     if freq not in _ANNUALIZATION_FACTORS:
-        raise ValueError(f"Unknown freq: {freq!r}, must be one of the {list(_ANNUALIZATION_FACTORS.keys())}")
+        raise ValueError(
+            f"Unknown freq: {freq!r}, must be one of the {list(_ANNUALIZATION_FACTORS.keys())}"
+        )
     return _ANNUALIZATION_FACTORS[freq]
+
 
 # -----------------------------------------------------------------------------
 # Date parsing & alignment / 日期解析与对齐
 # -----------------------------------------------------------------------------
+
 
 def parse_date(value: DateLike) -> PandasTimestamp:
     """
@@ -91,7 +96,8 @@ def parse_date(value: DateLike) -> PandasTimestamp:
         return pd.Timestamp(value).normalize()
     if isinstance(value, str):
         return pd.Timestamp(value.strip()).normalize()
-    raise TypeError(f"Cannot parse {type(value).__name__} as date") 
+    raise TypeError(f"Cannot parse {type(value).__name__} as date")
+
 
 def align_to_trading_day(
     dt: DateLike,
@@ -119,13 +125,12 @@ def align_to_trading_day(
     """
     if pd is None:
         raise ImportError("pandas is required for align_to_trading_day()")
-    
+
     ts = parse_date(dt)
-    
 
     if ts in trading_calendar:
         return ts
-    
+
     if method == "previous":
         # 找到 <= ts 的最后一个交易日 / Find last trading day <= ts
         candidates = trading_calendar[trading_calendar <= ts]
@@ -140,10 +145,12 @@ def align_to_trading_day(
         return candidates[0]
     else:
         raise ValueError(f"method must be 'previous' or 'next', got: {method!r}")
-    
+
+
 # -----------------------------------------------------------------------------
 # Rebalance date generation / 调仓日期生成
 # -----------------------------------------------------------------------------
+
 
 def generate_rebalance_dates(
     trading_calendar: PandasDatetimeIndex,
@@ -171,29 +178,31 @@ def generate_rebalance_dates(
     """
     if pd is None:
         raise ImportError("pandas is required for generate_rebalance_dates")
-    
+
     if freq == "D":
         # 每日:返回所有交易日 / Daily: return all trading days
         return trading_calendar
-    
+
     # 转换为 Series 以便使用 groupby / Convert to Series to use groupby
     cal_series = pd.Series(trading_calendar, index=trading_calendar)
 
     if freq == "W":
         # 按年-周分组,取每周最后一个交易日
         # Group by year-week, take last trading day of each week
-        grouped = cal_series.groupby([cal_series.index.isocalendar().year, 
-                                       cal_series.index.isocalendar().week]).last()
+        grouped = cal_series.groupby(
+            [cal_series.index.isocalendar().year, cal_series.index.isocalendar().week]
+        ).last()
     elif freq == "M":
         # 按年-月分组,取每月最后一个交易日
         # Group by year-month, take last trading day of each month
         grouped = cal_series.groupby([cal_series.index.year, cal_series.index.month]).last()
     else:
         raise ValueError(f"Unknown freq: {freq!r}")
-    
+
     # 返回实际的交易日期(而非周期结束日期)
     # Return the actual trading dates (not the period end dates)
     return pd.DatetimeIndex(grouped.values, name="date")
+
 
 __all__ = [
     "annualization_factor",

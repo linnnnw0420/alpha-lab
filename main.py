@@ -1,6 +1,6 @@
-def main():
-    print("Hello from alpha-lab!")
+"""Repository demo entry point."""
 
+from examples.sampled_momentum_backtest import main
 
 if __name__ == "__main__":
     main()

@@ -44,7 +44,7 @@ Design Principles
 1. **Pure utilities**: No business logic, only reusable helpers
 2. **Defensive coding**: All functions handle edge cases gracefully
 3. **Type safety**: Full type hints for all public functions
-4. **Optional dependencies**: Graceful degradation if packages missing
+4. **Dependencies**: pandas and NumPy are required; research extras are optional
 5. **Performance**: Efficient implementations, avoid unnecessary copies
 
 Dependency Rules
@@ -61,79 +61,74 @@ See Also
 from __future__ import annotations
 
 # -----------------------------------------------------------------------------
-# Logging Utilities
-# -----------------------------------------------------------------------------
-
-from alpha_lab.utils.logging import (
-    setup_logging,
-    get_logger,
-)
-
-# -----------------------------------------------------------------------------
 # Date and Time Utilities
 # -----------------------------------------------------------------------------
-
 from alpha_lab.utils.dates import (
-    annualization_factor,
-    parse_date,
     align_to_trading_day,
+    annualization_factor,
     generate_rebalance_dates,
+    parse_date,
 )
 
 # -----------------------------------------------------------------------------
-# Random Seed Management
+# Logging Utilities
 # -----------------------------------------------------------------------------
-
-from alpha_lab.utils.random import (
-    set_global_seed,
-    new_numpy_random_generator,
+from alpha_lab.utils.logging import (
+    get_logger,
+    setup_logging,
 )
 
 # -----------------------------------------------------------------------------
 # Mathematical Utilities
 # -----------------------------------------------------------------------------
-
 from alpha_lab.utils.math import (
-    safe_divide,
     annualize_return,
     annualize_vol,
-    to_log_return,
     from_log_return,
     np_to_array,
+    safe_divide,
+    to_log_return,
+)
+
+# -----------------------------------------------------------------------------
+# Random Seed Management
+# -----------------------------------------------------------------------------
+from alpha_lab.utils.random import (
+    new_numpy_random_generator,
+    set_global_seed,
 )
 
 # -----------------------------------------------------------------------------
 # Type Aliases and Definitions
 # -----------------------------------------------------------------------------
-
 from alpha_lab.utils.typing import (
-    # Primitives
-    Ticker,
     Asset,
-    FactorName,
-    ModelName,
-    RunName,
     Bps,
     # Date/time
     DateLike,
-    # Literals
-    RebalanceFreq,
-    PriceField,
-    # Path
-    PathLike,
+    EquityCurve,
+    FactorName,
+    FactorPanel,
+    ModelName,
+    NpArray,
     # Pandas/Numpy types
     PandasDataFrame,
-    PandasSeries,
-    PandasIndex,
-    PandasTimestamp,
     PandasDatetimeIndex,
-    NpArray,
+    PandasIndex,
+    PandasSeries,
+    PandasTimestamp,
+    # Path
+    PathLike,
+    PriceField,
     # Project-specific shapes
     PricePanel,
-    FactorPanel,
-    WeightVector,
-    EquityCurve,
+    # Literals
+    RebalanceFreq,
+    RunName,
+    # Primitives
+    Ticker,
     TradeFrame,
+    WeightVector,
 )
 
 # -----------------------------------------------------------------------------
@@ -192,55 +187,45 @@ __all__ = [
 # Version and metadata
 # -----------------------------------------------------------------------------
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Alpha-Lab Contributors"
 
 # -----------------------------------------------------------------------------
 # Module initialization
 # -----------------------------------------------------------------------------
 
+
 def _check_optional_dependencies() -> dict[str, bool]:
     """
     Check which optional dependencies are available.
-    
+
     Returns:
         Dict mapping package name to availability status
     """
     deps = {}
-    
-    # Check pandas
-    try:
-        import pandas as pd
-        deps["pandas"] = True
-    except ImportError:
-        deps["pandas"] = False
-    
-    # Check numpy
-    try:
-        import numpy as np
-        deps["numpy"] = True
-    except ImportError:
-        deps["numpy"] = False
-    
-    # Check sklearn (not required for utils, but used in ml/)
-    try:
-        import sklearn
-        deps["sklearn"] = True
-    except ImportError:
-        deps["sklearn"] = False
-    
+
+    from importlib.util import find_spec
+
+    deps["pandas"] = True
+    deps["numpy"] = True
+    deps["pyarrow"] = find_spec("pyarrow") is not None
+    deps["sklearn"] = find_spec("sklearn") is not None
+    deps["yfinance"] = find_spec("yfinance") is not None
+
     return deps
+
 
 # Store dependency status (useful for debugging)
 _OPTIONAL_DEPS = _check_optional_dependencies()
 
+
 def get_optional_deps() -> dict[str, bool]:
     """
     Get status of optional dependencies.
-    
+
     Returns:
         Dict mapping package name to availability status
-        
+
     Example:
         >>> from alpha_lab.utils import get_optional_deps
         >>> deps = get_optional_deps()
@@ -249,24 +234,6 @@ def get_optional_deps() -> dict[str, bool]:
     """
     return _OPTIONAL_DEPS.copy()
 
+
 # Add to public API
 __all__.append("get_optional_deps")
-
-# Warn if critical dependencies are missing
-if not _OPTIONAL_DEPS.get("pandas", False):
-    import warnings
-    warnings.warn(
-        "pandas is not installed. Many utilities will not work.\n"
-        "Install with: pip install pandas",
-        ImportWarning,
-        stacklevel=2,
-    )
-
-if not _OPTIONAL_DEPS.get("numpy", False):
-    import warnings
-    warnings.warn(
-        "numpy is not installed. Some math utilities will not work.\n"
-        "Install with: pip install numpy",
-        ImportWarning,
-        stacklevel=2,
-    )

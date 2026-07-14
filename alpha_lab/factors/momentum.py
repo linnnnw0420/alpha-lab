@@ -8,21 +8,20 @@ Key functions / 核心函数:
 
 动量因子原理 / Momentum Factor Theory:
     动量因子基于"过去表现好的股票未来可能继续表现好"的假设.
-    The momentum factor is based on the hypothesis that stocks that have 
+    The momentum factor is based on the hypothesis that stocks that have
     performed well in the past may continue to perform well in the future.
-    
+
     常用的动量因子:
     - 20日动量 (≈1个月)
-    - 60日动量 (≈3个月)  
+    - 60日动量 (≈3个月)
     - 120日动量 (≈6个月)
     - 252日动量 (≈1年)
 """
 
 from __future__ import annotations
 
-import logging
 from typing import Literal
-import pandas as pd
+
 import numpy as np
 
 from alpha_lab.utils.logging import get_logger
@@ -32,6 +31,7 @@ logger = get_logger(__name__)
 
 # Cache for computed momentum to avoid recomputation / 动量计算缓存,避免重复计算
 _MOMENTUM_CACHE: dict[str, PandasDataFrame] = {}
+
 
 def momentum(
     prices: PandasDataFrame,
@@ -82,25 +82,29 @@ def momentum(
         raise ValueError(f"method must be 'simple' or 'log', got {method!r}")
     if min_periods is None:
         min_periods = lookback
-    
+
     # Generate cache key using content hash instead of object id
     # This ensures cache validity even when DataFrame content changes
     try:
-        data_hash = hash((
-            tuple(prices.index),
-            tuple(prices.columns),
-            prices.values.tobytes() if hasattr(prices.values, 'tobytes') else str(prices.values)
-        ))
+        data_hash = hash(
+            (
+                tuple(prices.index),
+                tuple(prices.columns),
+                prices.values.tobytes()
+                if hasattr(prices.values, "tobytes")
+                else str(prices.values),
+            )
+        )
     except (TypeError, ValueError):
         # Fallback: disable caching for unhashable data
         data_hash = None
         use_cache = False
-    
+
     cache_key = f"{data_hash}_{lookback}_{lag}_{method}_{min_periods}"
     if use_cache and cache_key in _MOMENTUM_CACHE:
         logger.debug(f"Using cached momentum: lookback={lookback}, lag={lag}")
         return _MOMENTUM_CACHE[cache_key].copy()
-    
+
     logger.debug(
         f"Computing momentum: lookback={lookback}, lag={lag}, "
         f"method={method}, min_periods={min_periods}"
@@ -120,13 +124,13 @@ def momentum(
     else:  # log
         # 对数收益率: ln(终点价格 / 起点价格)
         factor = np.log(prices_lagged / prices_start)
-    
+
     # 应用最小有效期数掩码 / Apply min_periods mask
     if min_periods > 0:
         # 统计窗口内有效数据点数 / Count valid periods in window
         valid_count = prices.notna().rolling(window=total_lag, min_periods=1).sum()
         factor = factor.where(valid_count >= min_periods)
-    
+
     # 缓存结果 / Cache result
     if use_cache:
         _MOMENTUM_CACHE[cache_key] = factor.copy()
@@ -137,6 +141,7 @@ def momentum(
             logger.debug("Cleared oldest momentum cache entry")
 
     return factor
+
 
 def momentum_multi_period(
     prices: PandasDataFrame,
@@ -149,7 +154,7 @@ def momentum_multi_period(
     """
     Compute composite momentum from multiple lookback periods.
     计算多周期复合动量因子.
-    
+
     适用场景 / Use Cases:
     - 结合短/中/长期动量信号 / Combine short/medium/long-term momentum signals
     - 平滑单一周期动量的噪声 / Smooth out noise from single-period momentum
@@ -169,7 +174,7 @@ def momentum_multi_period(
 
     Returns / 返回:
         DataFrame: 加权复合动量因子
-    
+
     Example / 示例:
         # 结合 1个月,3个月,6个月动量,等权重
         # Combine 1M, 3M, 6M momentum with equal weight
@@ -177,7 +182,7 @@ def momentum_multi_period(
     """
     if not lookbacks:
         raise ValueError("lookbacks must not be empty")
-    
+
     n_periods = len(lookbacks)
 
     if weights is None:
@@ -190,7 +195,7 @@ def momentum_multi_period(
         if abs(total_weight) < 1e-12:
             raise ValueError("weights sum to zero")
         weights = [w / total_weight for w in weights]
-    
+
     logger.info(
         f"Computing multi-period momentum: lookbacks={lookbacks}, "
         f"weights={[f'{w:.3f}' for w in weights]}"
@@ -198,21 +203,25 @@ def momentum_multi_period(
 
     # 计算每个周期的动量分量 / Compute each momentum component
     components = []
-    for lb, wt in zip(lookbacks, weights):
+    for lb, wt in zip(lookbacks, weights, strict=True):
         mom = momentum(prices, lookback=lb, lag=lag, method=method)
 
         if normalize_each:
             # 截面 z-score 标准化(每天内部标准化)
             # Cross-sectional z-score at each date
             from alpha_lab.factors.transform import zscore
+
             mom = zscore(mom, axis=1)
-        
+
         components.append(mom * wt)  # 乘以权重
-    
+
     # 加权求和 / Sum weighted components
-    composite = pd.concat(components, axis=1).groupby(level=0, axis=1).sum()
+    composite = components[0].copy()
+    for component in components[1:]:
+        composite = composite.add(component, fill_value=0.0)
 
     return composite
+
 
 def clear_momentum_cache() -> None:
     """
@@ -222,6 +231,7 @@ def clear_momentum_cache() -> None:
     global _MOMENTUM_CACHE
     _MOMENTUM_CACHE.clear()
     logger.debug("Cleared momentum cache")
+
 
 __all__ = [
     "momentum",

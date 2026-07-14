@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from alpha_lab.utils.dates import parse_date, generate_rebalance_dates
+from alpha_lab.utils.dates import generate_rebalance_dates, parse_date
 from alpha_lab.utils.logging import get_logger
 from alpha_lab.utils.typing import DateLike, PandasDatetimeIndex, RebalanceFreq
 
@@ -28,6 +28,7 @@ logger = get_logger(__name__)
 
 # Cache for rebalance schedules / 调仓日期缓存
 _REBALANCE_CACHE: dict[str, PandasDatetimeIndex] = {}
+
 
 def generate_rebalance_schedule(
     trading_calendar: PandasDatetimeIndex,
@@ -51,7 +52,7 @@ def generate_rebalance_schedule(
         end_date: 回测结束日期
         freq: 调仓频率 'D' (每日), 'W' (每周), 'M' (每月)
         use_cache: 是否使用缓存的调仓日期表
-    
+
     Returns / 返回:
         DatetimeIndex: 调仓日期列表
 
@@ -68,7 +69,7 @@ def generate_rebalance_schedule(
     end_ts = parse_date(end_date)
 
     if start_ts > end_ts:
-        raise ValueError(f"start_date must be <= end_date")
+        raise ValueError("start_date must be <= end_date")
 
     # Generate cache key
     cal_key = f"{trading_calendar.min()}_{trading_calendar.max()}_{len(trading_calendar)}"
@@ -77,8 +78,10 @@ def generate_rebalance_schedule(
     if use_cache and cache_key in _REBALANCE_CACHE:
         logger.debug(f"Using cached rebalance schedule: freq={freq}")
         return _REBALANCE_CACHE[cache_key]
-    
-    logger.debug(f"Generating rebalance schedule: freq={freq}, {start_ts.date()} to {end_ts.date()}")
+
+    logger.debug(
+        f"Generating rebalance schedule: freq={freq}, {start_ts.date()} to {end_ts.date()}"
+    )
 
     # 过滤日历到指定日期范围 / Filter calendar to date range
     cal_subset = trading_calendar[(trading_calendar >= start_ts) & (trading_calendar <= end_ts)]
@@ -86,7 +89,7 @@ def generate_rebalance_schedule(
     if cal_subset.empty:
         logger.warning(f"No trading days in range {start_ts.date()} to {end_ts.date()}")
         return pd.DatetimeIndex([], name="date")
-    
+
     # 按指定频率生成调仓日期 / Generate rebalance dates at specified frequency
     rebalance_dates = generate_rebalance_dates(cal_subset, freq)
 
@@ -103,6 +106,7 @@ def generate_rebalance_schedule(
 
     return rebalance_dates
 
+
 def clear_rebalance_cache() -> None:
     """
     Clear rebalance schedule cache.
@@ -111,6 +115,7 @@ def clear_rebalance_cache() -> None:
     global _REBALANCE_CACHE
     _REBALANCE_CACHE.clear()
     logger.debug("Cleared rebalance cache")
+
 
 __all__ = [
     "generate_rebalance_schedule",

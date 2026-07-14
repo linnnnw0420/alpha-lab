@@ -15,13 +15,14 @@ Key functions / 核心函数:
 
 from __future__ import annotations
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 from alpha_lab.utils.logging import get_logger
 from alpha_lab.utils.typing import PandasDataFrame, PandasSeries
 
 logger = get_logger(__name__)
+
 
 def top_k_long_only(
     factor: PandasDataFrame,
@@ -57,11 +58,11 @@ def top_k_long_only(
         raise ValueError(f"k_pct must be in (0, 1], got {k_pct}")
     if buffer_pct < 0:
         raise ValueError(f"buffer_pct must be >= 0, got {buffer_pct}")
-    
+
     if factor.empty:
         logger.warning("Empty factor DataFrame, returning empty weights")
         return pd.DataFrame(index=factor.index, columns=factor.columns, dtype=float)
-    
+
     use_hysteresis = buffer_pct > 0
     logger.debug(
         f"Computing long-only weights: top {k_pct:.1%}, equal_weight={equal_weight}, "
@@ -81,7 +82,7 @@ def top_k_long_only(
         if valid_scores.empty:
             logger.debug(f"No valid scores on {date}, skipping")
             continue
-        
+
         ranked = valid_scores.sort_values(ascending=False)
         n_assets = len(ranked)
         n_select = max(1, int(n_assets * k_pct))  # 至少选择 1 个资产
@@ -129,9 +130,10 @@ def top_k_long_only(
             else:
                 # 回退到等权重 / Fallback to equal weight if rank sum is zero
                 weights.loc[date, selected] = 1.0 / len(selected)
-        
+
     return weights
-    
+
+
 def top_k_long_short(
     factor: PandasDataFrame,
     k_pct: float = 0.2,
@@ -163,7 +165,7 @@ def top_k_long_short(
     Example / 示例:
         >>> # 美元中性:多头 $1,空头 $1
         >>> weights = top_k_long_short(momentum_factor, k_pct=0.2)
-        
+
         >>> # 多头偏向:多头 $1.5,空头 $0.5
         >>> weights = top_k_long_short(factor, k_pct=0.2, long_weight=1.5, short_weight=0.5)
     """
@@ -171,11 +173,11 @@ def top_k_long_short(
         raise ValueError(f"k_pct must be in (0, 0.5] for long-short, got {k_pct}")
     if long_weight <= 0 or short_weight < 0:
         raise ValueError(f"weights must be >= 0, got long={long_weight}, short={short_weight}")
-    
+
     if factor.empty:
         logger.warning("Empty factor DataFrame, returning empty weights")
         return pd.DataFrame(index=factor.index, columns=factor.columns, dtype=float)
-    
+
     logger.debug(
         f"Computing long-short weights: top/bottom {k_pct:.1%}, "
         f"long={long_weight:.2f}, short={short_weight:.2f}"
@@ -199,7 +201,7 @@ def top_k_long_short(
         if n_assets < 2:
             logger.debug(f"Only {n_assets} valid assets on {date}, need at least 2 for long-short")
             continue
-            
+
         n_select = max(1, int(n_assets * k_pct))
 
         # 做多前 K 个资产 / Long top K
@@ -211,6 +213,7 @@ def top_k_long_short(
         weights.loc[date, bottom_assets] = -short_weight / len(bottom_assets)
 
     return weights
+
 
 def proportional_weights(
     factor: PandasDataFrame,
@@ -242,7 +245,7 @@ def proportional_weights(
     if min_weight < 0 or max_weight <= 0:
         raise ValueError(f"Invalid weight bounds: min={min_weight}, max={max_weight}")
     if min_weight >= max_weight:
-        raise ValueError(f"min_weight must be < max_weight")
+        raise ValueError("min_weight must be < max_weight")
     if target_leverage <= 0:
         raise ValueError(f"target_leverage must be > 0, got {target_leverage}")
 
@@ -260,7 +263,7 @@ def proportional_weights(
         valid_scores = scores.dropna()
         if valid_scores.empty:
             continue
-    
+
         # 如果有负分数,平移到非负 / Shift scores to be non-negative if needed
         min_score = valid_scores.min()
         if min_score < 0:
@@ -284,18 +287,19 @@ def proportional_weights(
         clipped_sum = clipped.sum()
         if clipped_sum > 1e-12:
             weights.loc[date, clipped.index] = clipped / clipped_sum * target_leverage
-        
+
     return weights
+
 
 def apply_weight_constraints(
     weights: PandasDataFrame,
     max_position_size: float | None = None,
     max_turnover: float | None = None,
-    prev_weights: PandasSeries | None = None, 
+    prev_weights: PandasSeries | None = None,
 ) -> PandasDataFrame:
     """
-    Apply position size and turnover constraints (v1 feature stub).
-    应用持仓上限和换手率约束(v1 功能预留).
+    Apply position size and turnover constraints.
+    应用持仓上限和换手率约束.
 
     Args / 参数:
         weights: 目标权重 (date x asset)
@@ -344,6 +348,7 @@ def apply_weight_constraints(
 
     return adjusted
 
+
 def _normalize_long_short(
     weights: PandasSeries,
     target_long: float,
@@ -363,6 +368,7 @@ def _normalize_long_short(
 
     return long_side - short_side
 
+
 def _apply_turnover_limit(
     prev_weights: PandasSeries,
     target_weights: PandasSeries,
@@ -378,6 +384,7 @@ def _apply_turnover_limit(
         return target_weights
     scaling = max_turnover / turnover
     return prev_weights + scaling * delta
+
 
 __all__ = [
     "top_k_long_only",

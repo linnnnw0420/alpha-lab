@@ -29,7 +29,7 @@ FactorName: TypeAlias = str
 ModelName: TypeAlias = str
 RunName: TypeAlias = str
 
-Bps: TypeAlias = float # basis points, e.g. 5.0 = 5 bps
+Bps: TypeAlias = float  # basis points, e.g. 5.0 = 5 bps
 
 # -----------------------------------------------------------------------------
 # Date/time related

@@ -18,16 +18,16 @@ Key functions / 核心函数:
 
 from __future__ import annotations
 
-import logging
 from typing import Literal
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 from alpha_lab.utils.logging import get_logger
 from alpha_lab.utils.typing import PandasDataFrame, PandasSeries
 
 logger = get_logger(__name__)
+
 
 def winsorize(
     data: PandasSeries | PandasDataFrame,
@@ -54,7 +54,7 @@ def winsorize(
               1 = 行方向 (截面,每个日期内部)
               None = 整个数据集
         inclusive: 阈值是否包含边界
-    
+
     Example / 示例:
         # 截面 winsorize(每个日期内部)
         # Cross-sectional winsorization (each date)
@@ -64,37 +64,34 @@ def winsorize(
         raise ValueError(f"percentiles must be in [0, 1], got lower={lower}, upper={upper}")
     if lower >= upper:
         raise ValueError(f"lower must be < upper, got {lower} >= {upper}")
-    
+
     logger.debug(f"Winsorizing: lower={lower:.2%}, upper={upper:.2%}, axis={axis}")
 
     if isinstance(data, pd.Series):
         q_lower = data.quantile(lower)
         q_upper = data.quantile(upper)
         return data.clip(lower=q_lower, upper=q_upper)
-    
+
     # DataFrame
     if axis is None:
-        # Winsorize entire DataFrame as one distribution
-        q_lower = data.quantile(lower).min()
-        q_upper = data.quantile(upper).max()
+        values = data.stack().dropna()
+        if values.empty:
+            return data.copy()
+        q_lower = values.quantile(lower)
+        q_upper = values.quantile(upper)
         return data.clip(lower=q_lower, upper=q_upper)
-    
+
     elif axis == 0:
-        # Column-wise (time-series)
-        return data.apply(lambda col: col.clip(
-            lower=col.quantile(lower),
-            upper=col.quantile(upper)
-        ), axis=0)
-    
+        return data.clip(lower=data.quantile(lower), upper=data.quantile(upper), axis=1)
+
     elif axis == 1:
-        # Row-wise (cross-section at each date)
-        return data.apply(lambda row: row.clip(
-            lower=row.quantile(lower),
-            upper=row.quantile(upper)
-        ), axis=1)
-    
+        return data.clip(
+            lower=data.quantile(lower, axis=1), upper=data.quantile(upper, axis=1), axis=0
+        )
+
     else:
         raise ValueError(f"axis must be 0, 1, or None, got {axis}")
+
 
 def zscore(
     data: PandasDataFrame | PandasSeries,
@@ -122,10 +119,10 @@ def zscore(
               None = 整个数据集
         ddof: 标准差自由度 (1 = 样本标准差, 0 = 总体标准差)
         min_periods: 最小有效数据点数
-    
+
     Returns / 返回:
         Z-scored data (与输入形状相同)
-    
+
     Example / 示例:
         # 截面 z-score(每个日期内部标准化)
         # Cross-sectional z-score at each date
@@ -137,41 +134,42 @@ def zscore(
         std = data.std(ddof=ddof)
         if std < 1e-12 or pd.isna(std):
             logger.warning("Standard deviation is zero or NaN, returning zeros")
-            return pd.Series(0.0, index=data.index)
+            return pd.Series(0.0, index=data.index).where(data.notna())
         return (data - mean) / std
 
     # DataFrame
     if axis is None:
-        # 整体标准化 / Standardize entire DataFrame
-        mean = data.mean().mean()
-        std = data.std().mean()
-        if std < 1e-12:
+        values = data.stack().dropna()
+        mean = values.mean()
+        std = values.std(ddof=ddof)
+        if std < 1e-12 or pd.isna(std):
             logger.warning("Standard deviation is near zero")
-            return pd.DataFrame(0.0, index=data.index, columns=data.columns)
+            return pd.DataFrame(0.0, index=data.index, columns=data.columns).where(data.notna())
         return (data - mean) / std
-    
+
     elif axis == 0:
         # 列方向(时间序列)/ Column-wise (time series)
         std = data.std(axis=0, ddof=ddof)
         std_safe = std.replace(0, np.nan)  # 避免除以零 / Replace zero std with NaN
         result = (data - data.mean(axis=0)) / std_safe
-        return result.fillna(0.0)  # 零标准差填充为0
-    
+        return result.fillna(0.0).where(data.notna())
+
     elif axis == 1:
         # 行方向(截面,每个日期)/ Row-wise (cross-section at each date)
         result = data.sub(data.mean(axis=1), axis=0).div(
             data.std(axis=1, ddof=ddof).replace(0, np.nan), axis=0
         )
-        return result.fillna(0.0)  # 零标准差填充为0
-    
+        return result.fillna(0.0).where(data.notna())
+
     else:
         raise ValueError(f"axis must be 0, 1, or None, got {axis}")
 
+
 def rank_normalize(
-        data: PandasDataFrame | PandasSeries,
-        axis: int | None = None,
-        method: Literal["average", "min", "max", "first", "dense"] = "average",
-        pct: bool = True,
+    data: PandasDataFrame | PandasSeries,
+    axis: int | None = None,
+    method: Literal["average", "min", "max", "first", "dense"] = "average",
+    pct: bool = True,
 ) -> PandasDataFrame | PandasSeries:
     """
     Convert values to ranks, optionally scaled to [0, 1].
@@ -208,7 +206,7 @@ def rank_normalize(
 
     if isinstance(data, pd.Series):
         return data.rank(method=method, pct=pct)
-    
+
     # DataFrame
     if axis is None:
         # Rank entire DataFrame
@@ -223,6 +221,7 @@ def rank_normalize(
         return data.rank(axis=1, method=method, pct=pct)
     else:
         raise ValueError(f"axis must be 0, 1, or None, got {axis}")
+
 
 def neutralize_industry(
     factor: PandasDataFrame,
@@ -243,16 +242,52 @@ def neutralize_industry(
     Returns / 返回:
         行业中性化后的因子 (形状相同)
 
-    Note / 注意:
-        v0 版本 - 预留给未来实现.
-        v0 implementation - marked for future enhancement.
+    Missing labels are left as NaN in the result.
     """
-    logger.warning("neutralize_industry is v0 stub - will be implemented in v1")
-    raise NotImplementedError("Industry neutralization not yet implemented")
+    labels = pd.Series(industry_map, dtype="object").reindex(factor.columns)
+    return neutralize(factor, categorical=labels)
+
+
+def neutralize(
+    factor: PandasDataFrame,
+    *,
+    categorical: dict[str, str] | PandasSeries | None = None,
+    exposures: PandasDataFrame | None = None,
+) -> PandasDataFrame:
+    """Cross-sectionally regress factor scores on categorical/continuous exposures."""
+    if categorical is None and exposures is None:
+        raise ValueError("Provide categorical labels, continuous exposures, or both")
+    labels = None if categorical is None else pd.Series(categorical).reindex(factor.columns)
+    continuous = None
+    if exposures is not None:
+        continuous = exposures.reindex(index=factor.columns).apply(pd.to_numeric, errors="coerce")
+
+    result = pd.DataFrame(np.nan, index=factor.index, columns=factor.columns, dtype=float)
+    for date in factor.index:
+        score = factor.loc[date].astype(float)
+        parts: list[pd.DataFrame] = []
+        if labels is not None:
+            parts.append(pd.get_dummies(labels, dtype=float, dummy_na=False))
+        if continuous is not None:
+            parts.append(continuous)
+        design = pd.concat(parts, axis=1)
+        design.insert(0, "intercept", 1.0)
+        valid = score.notna() & np.isfinite(score) & design.notna().all(axis=1)
+        if labels is not None:
+            valid &= labels.notna()
+        if int(valid.sum()) <= design.shape[1]:
+            continue
+        x = design.loc[valid].to_numpy(dtype=float)
+        y = score.loc[valid].to_numpy(dtype=float)
+        beta, *_ = np.linalg.lstsq(x, y, rcond=None)
+        result.loc[date, valid] = y - x @ beta
+    return result
+
 
 __all__ = [
     "winsorize",
     "zscore",
     "rank_normalize",
     "neutralize_industry",
+    "neutralize",
 ]

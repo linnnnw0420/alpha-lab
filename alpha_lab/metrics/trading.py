@@ -19,6 +19,7 @@ logger = get_logger(__name__)
 
 _WEIGHT_EPS = 1e-12
 
+
 def compute_trading_metrics(
     equity_curve: PandasSeries,
     positions: PandasDataFrame | None = None,
@@ -80,7 +81,9 @@ def compute_trading_metrics(
             if cost_rate > 0:
                 cost_total = aligned.sum() * cost_rate
                 metrics["cost_est_total"] = float(cost_total)
-                metrics["cost_est_pct"] = float(safe_divide(cost_total, equity_curve.iloc[0], default=0.0))
+                metrics["cost_est_pct"] = float(
+                    safe_divide(cost_total, equity_curve.iloc[0], default=0.0)
+                )
         else:
             logger.debug("Trades provided but no valid trade values")
 
@@ -99,7 +102,7 @@ def compute_trading_metrics(
         # Normalize by invested weight (ignore cash)
         weight_sum = weights_abs.sum(axis=1).replace(0.0, np.nan)
         weights_norm = weights_abs.div(weight_sum, axis=0)
-        hhi = (weights_norm ** 2).sum(axis=1).fillna(0.0)
+        hhi = (weights_norm**2).sum(axis=1).fillna(0.0)
         if not hhi.empty:
             metrics["hhi_avg"] = float(hhi.mean())
             metrics["hhi_max"] = float(hhi.max())
@@ -108,6 +111,7 @@ def compute_trading_metrics(
         logger.debug("No trading metrics computed (missing trades/positions)")
 
     return metrics
+
 
 def _aggregate_trade_value(trades: PandasDataFrame) -> PandasSeries:
     """
@@ -137,5 +141,6 @@ def _aggregate_trade_value(trades: PandasDataFrame) -> PandasSeries:
         return pd.Series(dtype=float)
 
     return df.groupby("date")["value"].sum()
+
 
 __all__ = ["compute_trading_metrics"]

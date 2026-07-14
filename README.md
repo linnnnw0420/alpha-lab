@@ -1,170 +1,214 @@
 # Alpha-Lab
 
-Alpha-Lab is a small, notebook-friendly framework for factor research in equities. It focuses on the usual research loop: load local price data, build factors, turn scores into portfolio weights, run a simple backtest, and inspect the results.
+Alpha-Lab is a notebook-friendly personal research framework for equity factors. It provides a transparent path from local or cached prices to factors, portfolio weights, backtests, diagnostics, reproducible experiments, and leakage-safe walk-forward models.
 
-The codebase is lightweight on purpose. It is closer to a research sandbox than a production trading system.
+It is intentionally not a production trading simulator. Corporate-action reconstruction, point-in-time index membership, delisting returns, borrow constraints, market impact, and order-book simulation remain outside its scope.
 
-## What is already here
+## Architecture
 
-- Local price loading from CSV files in either wide or long format
-- Momentum factor calculation, including multi-horizon momentum
-- Common factor transforms such as winsorization, z-score normalization, and rank normalization
-- Portfolio construction helpers for long-only, long-short, and proportional weighting
-- A rebalancing backtest engine with basic transaction cost and turnover controls
-- Performance, drawdown, trading, and factor-diagnostics utilities
+```text
+CSV / Parquet / optional yfinance
+              │
+              ▼
+   data contract + fixed universe sample
+              │
+              ▼
+ factors + transforms + metadata ──► factor diagnostics
+              │
+              ▼
+ portfolio weights ──► schedule ──► NumPy accounting
+                                         │
+                                         ▼
+                         result + metrics + experiment artifacts
 
-## Current scope
+ features + forward labels ──► whole-date walk-forward ML ──► weights
+```
 
-- This repository is library-first and notebook-first. `main.py` is still a placeholder.
-- CSV is the only implemented data source right now. Parquet is declared but not implemented.
-- The momentum and backtest pieces are the most complete parts of the project.
-- Some config and ML-related modules are scaffolding for later work.
-- `neutralize_industry()` is a stub.
-- Notebook coverage is uneven:
-  - `04_factor_diagnostics.ipynb` and `99_sanity_check.ipynb` contain real work
-  - `01_factor_demo.ipynb` and `03_ml_cross_section.ipynb` are empty
-  - `02_backtest_demo.ipynb` exists but is effectively a placeholder
+Public functions such as `load_prices`, `momentum`, `top_k_long_only`, and `run_backtest` remain compatible with the original project. Internally, data validation, scheduling, accounting, results, experiments, and ML are isolated and independently testable.
 
 ## Installation
 
-Python 3.10+ is required.
-
-If you use `uv`:
+Python 3.10 or newer is required.
 
 ```bash
 uv sync
+uv sync --group dev
 ```
 
-If you prefer plain `pip`:
+With pip:
 
 ```bash
-python3 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate
 pip install -e .
 ```
 
-For notebook work:
+Optional capabilities:
 
 ```bash
-uv sync --group dev
+pip install -e '.[data]'    # PyArrow / Parquet
+pip install -e '.[market]'  # yfinance
+pip install -e '.[ml]'      # scikit-learn
+pip install -e '.[all]'
 ```
 
-## Quick Start
+## Reproducible sampled backtest
+
+The bundled file contains 196 adjusted-close columns. Sampling happens once before the backtest and is fixed by its seed:
 
 ```python
+import pandas as pd
+
 from alpha_lab import (
-    UNIVERSE_DEMO,
     default_backtest_config,
-    load_prices,
+    load_sampled_prices,
     momentum,
-    zscore,
-    top_k_long_only,
     run_backtest,
-    generate_backtest_summary,
+    top_k_long_only,
+    zscore,
 )
 
-# The sample file in data/raw uses a wide format:
-# Date, TICKER_1, TICKER_2, ...
-prices = load_prices(
-    universe=UNIVERSE_DEMO,
-    start_date="2018-01-01",
-    end_date="2024-12-31",
-    csv_file="random_sampled_stocks_adj_close.csv",
-)
+file_name = "random_sampled_stocks_adj_close.csv"
+candidates = pd.read_csv(f"data/raw/{file_name}", nrows=0).columns[1:].tolist()
 
-factor = momentum(prices, lookback=60, lag=1)
-factor = zscore(factor, axis=1)
+prices, selection = load_sampled_prices(
+    candidates,
+    "2018-01-01",
+    "2024-12-31",
+    sample_size=30,
+    seed=42,
+    csv_file=file_name,
+)
+factor = zscore(momentum(prices, lookback=60, lag=1), axis=1)
 weights = top_k_long_only(factor, k_pct=0.2, buffer_pct=0.05)
+config = default_backtest_config().with_updates(max_turnover=1.0)
+result = run_backtest(weights, prices=prices, config=config)
 
-cfg = default_backtest_config().with_updates(
-    start_date="2018-01-01",
-    end_date="2024-12-31",
-    rebalance_freq="M",
+print(selection.selection_id, selection.selected)
+print(result.summary_stats())
+```
+
+`selection` records the candidate and selected tickers, seed, filtering rules, exclusions, and data fingerprint. Passing no sampling request preserves the full-universe workflow.
+
+## Data sources and contracts
+
+`load_prices` supports:
+
+- wide CSV: `date,AAPL,MSFT,...`;
+- long CSV: `date,ticker,open,high,low,close,volume`;
+- wide or long Parquet through `source="parquet"`;
+- any object implementing the `DataSource` protocol;
+- optional cached yfinance through `YFinanceDataSource`.
+
+Wide CSV reads project only requested ticker columns. Long CSV reads in chunks. Parquet uses column projection where possible. Duplicate dates or `(date, ticker)` rows are rejected by default instead of silently aggregated.
+
+The canonical panel has a sorted, unique, timezone-naive `DatetimeIndex`, deterministic ticker columns, numeric values, and an explicit missing-value policy. See [Data contract](docs/DATA_CONTRACT.md).
+
+## Factor research
+
+Available research tools include:
+
+- single- and multi-period momentum;
+- winsorization, z-scores, ranks, and industry/continuous-exposure neutralization;
+- `FactorDefinition` and `FactorResult` metadata;
+- Pearson/Spearman IC and ICIR;
+- coverage, dispersion, quantile returns, cumulative spread, factor turnover, and rank stability.
+
+```python
+from alpha_lab.metrics.factor_diagnostics import (
+    compute_forward_returns,
+    generate_factor_tear_sheet,
 )
 
-result = run_backtest(weights=weights, prices=prices, config=cfg)
-summary = generate_backtest_summary(result)
-
-print(summary["total_return"])
-print(summary["sharpe_ratio"])
+future = compute_forward_returns(prices, horizon=20, delay=1)
+tear_sheet = generate_factor_tear_sheet(factor, future, quantiles=5, min_obs=10)
+print(tear_sheet.ic_stats)
 ```
 
-## Data Layout
+## Backtest semantics
 
-By default the project looks for data under `data/raw/`.
+The engine distinguishes signal dates from execution dates. `execution_delay_days=1` maps a signal to the next available trading day. Missing or non-positive execution prices are not traded; existing holdings use the last known valid valuation price. Transaction costs, turnover caps, and rebalance thresholds are applied once inside the accounting layer.
 
-The CSV loader supports two shapes:
+The hot loop uses preallocated NumPy arrays and returns pandas equity, returns, positions, and reconciled trade records. Trade rows include signal date, execution date, side, shares, price, notional, and allocated cost.
 
-1. Wide format
+## Experiments
 
-```text
-date,AAPL,MSFT,GOOGL
-2024-01-02,185.64,370.87,139.56
-2024-01-03,184.25,368.11,138.45
+`alpha_lab.experiments` saves normalized configuration, environment versions, fingerprints, warnings, metrics, equity, positions, returns, trades, predictions, and diagnostic tables. Run IDs depend on configuration and fingerprints; creation timestamps are recorded separately.
+
+```python
+from alpha_lab.experiments import run_and_save_experiment
+
+saved = run_and_save_experiment(
+    weights,
+    prices,
+    config,
+    {"run_name": "momentum-60", "seed": 42},
+    "artifacts",
+    fingerprints={"universe": selection.selection_id},
+)
+print(saved.path)
 ```
 
-2. Long format
+## Walk-forward ML
 
-```text
-date,ticker,open,high,low,close,volume
-2024-01-02,AAPL,184.0,186.1,183.4,185.64,53412000
-2024-01-02,MSFT,369.8,372.4,368.7,370.87,22111000
+Scikit-learn support is optional. The default model pipeline uses median imputation, standardization, and Ridge regression. Every preprocessing step is refit within its training window.
+
+```python
+from alpha_lab.ml import WalkForwardSplit, build_supervised_dataset, run_walk_forward
+
+dataset = build_supervised_dataset(
+    {"momentum_60": factor}, prices, horizon=5, delay=1
+)
+splitter = WalkForwardSplit(
+    min_train_dates=252,
+    test_dates=63,
+    gap_dates=6,
+)
+ml_result = run_walk_forward(dataset, splitter)
 ```
 
-If you do not pass `csv_file=...`, the loader searches for:
+Splits operate on complete dates, so stocks from one date cannot be divided between train and test sets.
 
-- `close.csv`
-- `prices_close.csv`
-- `prices.csv`
-- `ohlcv.csv`
+## Runnable examples
 
-This repository also includes a sample file at `data/raw/random_sampled_stocks_adj_close.csv`. It is a wide-format adjusted-close panel with 196 tickers and dates from `2010-01-01` to `2025-12-31`.
+```bash
+uv run python examples/momentum_backtest.py
+uv run python examples/sampled_momentum_backtest.py
+uv run python examples/factor_diagnostics.py
+uv run python examples/walk_forward_ml.py
+uv run python examples/experiment_artifacts.py
+uv run python benchmarks/backtest_benchmark.py
+```
 
-## Project Structure
+The scripts are the automated source of truth. Notebooks provide additional explanation and plots.
+
+## Project structure
 
 ```text
 alpha_lab/
-  backtest/      Backtest engine and result container
-  config/        Paths, universe, factor, backtest, and ML config objects
-  data/          Data loaders and source adapters
-  factors/       Factor definitions and factor transforms
-  metrics/       Performance, drawdown, trading, and diagnostics utilities
-  portfolio/     Rebalance scheduling and weighting logic
-  utils/         Logging, dates, math, typing, and random helpers
-notebooks/       Research notebooks and sanity checks
-data/raw/        Local sample data
+  backtest/      validation, scheduling, NumPy accounting, result, orchestration
+  config/        data, factor, portfolio, backtest, experiment, and ML configs
+  data/          contracts, sampling, cache, CSV, Parquet, optional yfinance
+  experiments/   artifact save/load, runner, comparisons
+  factors/       factor definitions, metadata, transforms
+  metrics/       performance, drawdown, trading, factor diagnostics
+  ml/            supervised datasets, walk-forward splits and models
+  portfolio/     rebalance schedules, weighting, constraints
+benchmarks/      repeatable performance measurements
+examples/        runnable local workflows
+tests/           synthetic unit and integration tests
 ```
 
-## Useful Modules
+## Verification
 
-- `alpha_lab.data.loader`: load universes, prices, and returns
-- `alpha_lab.factors.momentum`: momentum factor helpers
-- `alpha_lab.factors.transform`: winsorize, z-score, rank normalization
-- `alpha_lab.portfolio.weighting`: factor-to-weight conversion
-- `alpha_lab.backtest.engine`: core backtest loop
-- `alpha_lab.metrics.summary`: one-shot backtest summaries
-- `alpha_lab.metrics.factor_diagnostics`: IC and forward-return diagnostics
+```bash
+uv run python -m compileall alpha_lab
+uv run pytest
+uv run ruff check alpha_lab tests examples benchmarks
+```
 
-## Path Configuration
+See the [refactoring roadmap](docs/REFACTORING_ROADMAP.md), [approved design](docs/superpowers/specs/2026-07-14-alpha-lab-research-framework-design.md), [implementation plan](docs/superpowers/plans/2026-07-14-alpha-lab-research-framework-plan.md), and [glossary](docs/GLOSSARY.md).
 
-The project resolves paths from the repository root by default, but you can override them with environment variables:
+## Data limitations
 
-- `ALPHA_LAB_ROOT`
-- `ALPHA_LAB_DATA_DIR`
-- `ALPHA_LAB_ARTIFACT_DIR`
-- `ALPHA_LAB_CACHE_DIR`
-- `ALPHA_LAB_LOGS_DIR`
-
-## Notes
-
-- Rebalance frequencies are `D`, `W`, and `M`.
-- The backtest engine applies an execution delay and basic turnover controls through `BacktestConfig`.
-- Trading metrics depend on positions and recorded trades being available.
-- The package currently depends on `numpy`, `pandas`, `matplotlib`, and `scipy`.
-
-## Next sensible improvements
-
-- Add a real backtest demo notebook
-- Implement Parquet support
-- Fill in the ML pipeline or remove the placeholder surface area
-- Add tests around loader edge cases and notebook examples
+The bundled sample and a current ticker list are convenient for learning, but they do not provide point-in-time constituents and therefore do not eliminate survivorship bias. yfinance availability and adjusted-price conventions can change. Record source assumptions and fingerprints before interpreting a result as investment evidence.

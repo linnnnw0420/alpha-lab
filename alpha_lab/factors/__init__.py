@@ -9,8 +9,15 @@ Provides:
 
 from __future__ import annotations
 
+from alpha_lab.factors.metadata import FactorDefinition, FactorResult
 from alpha_lab.factors.momentum import momentum, momentum_multi_period
-from alpha_lab.factors.transform import winsorize, zscore, rank_normalize
+from alpha_lab.factors.transform import (
+    neutralize,
+    neutralize_industry,
+    rank_normalize,
+    winsorize,
+    zscore,
+)
 
 __all__ = [
     "momentum",
@@ -18,4 +25,8 @@ __all__ = [
     "winsorize",
     "zscore",
     "rank_normalize",
+    "neutralize",
+    "neutralize_industry",
+    "FactorDefinition",
+    "FactorResult",
 ]

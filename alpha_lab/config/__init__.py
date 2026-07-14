@@ -55,19 +55,8 @@ See Also
 from __future__ import annotations
 
 # -----------------------------------------------------------------------------
-# Path Management
-# -----------------------------------------------------------------------------
-
-from alpha_lab.config.paths import (
-    Paths,
-    get_paths,
-    ensure_dir,
-)
-
-# -----------------------------------------------------------------------------
 # Backtest Configuration
 # -----------------------------------------------------------------------------
-
 from alpha_lab.config.backtest import (
     BacktestConfig,
     BacktestFreq,
@@ -77,37 +66,44 @@ from alpha_lab.config.backtest import (
 )
 
 # -----------------------------------------------------------------------------
-# Universe Configuration
-# -----------------------------------------------------------------------------
-
-from alpha_lab.config.universe import (
-    UniverseConfig,
-    UNIVERSE_DEMO,
-    get_universe,
-)
-
-# -----------------------------------------------------------------------------
 # Factor Configuration
 # -----------------------------------------------------------------------------
-
 from alpha_lab.config.factors import (
-    FactorParam,
-    FactorComboConfig,
-    DEFAULT_FACTOR_PARAMS,
     DEFAULT_FACTOR_COMBOS,
+    DEFAULT_FACTOR_PARAMS,
+    FactorComboConfig,
+    FactorParam,
 )
 
 # -----------------------------------------------------------------------------
 # ML Configuration
 # -----------------------------------------------------------------------------
-
 from alpha_lab.config.ml import (
-    MLModelConfig,
     MLFeatureConfig,
+    MLModelConfig,
     MLSplitConfig,
-    default_ml_model_config,
     default_ml_feature_config,
+    default_ml_model_config,
     default_ml_split_config,
+)
+
+# -----------------------------------------------------------------------------
+# Path Management
+# -----------------------------------------------------------------------------
+from alpha_lab.config.paths import (
+    Paths,
+    ensure_dir,
+    get_paths,
+)
+from alpha_lab.config.research import DataConfig, ExperimentConfig, FactorConfig, PortfolioConfig
+
+# -----------------------------------------------------------------------------
+# Universe Configuration
+# -----------------------------------------------------------------------------
+from alpha_lab.config.universe import (
+    UNIVERSE_DEMO,
+    UniverseConfig,
+    get_universe,
 )
 
 # -----------------------------------------------------------------------------
@@ -141,23 +137,28 @@ __all__ = [
     "default_ml_model_config",
     "default_ml_feature_config",
     "default_ml_split_config",
+    "DataConfig",
+    "ExperimentConfig",
+    "FactorConfig",
+    "PortfolioConfig",
 ]
 
 # -----------------------------------------------------------------------------
 # Version and metadata
 # -----------------------------------------------------------------------------
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Alpha-Lab Contributors"
 
 # -----------------------------------------------------------------------------
 # Module initialization and validation
 # -----------------------------------------------------------------------------
 
+
 def _validate_config_module() -> None:
     """
     Perform module-level validation checks.
-    
+
     This runs on import to catch common misconfigurations early.
     """
     # Ensure critical paths can be resolved
@@ -167,12 +168,14 @@ def _validate_config_module() -> None:
         assert paths.project_root.exists(), "Project root not found"
     except Exception as e:
         import warnings
+
         warnings.warn(
             f"Config module initialization warning: {e}\n"
             f"Some path resolution may fail. Set ALPHA_LAB_ROOT if needed.",
             RuntimeWarning,
             stacklevel=2,
         )
+
 
 # Run validation on import (non-blocking)
 _validate_config_module()

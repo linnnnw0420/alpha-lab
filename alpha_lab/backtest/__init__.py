@@ -9,7 +9,8 @@ Provides:
 
 from __future__ import annotations
 
-from alpha_lab.backtest.engine import run_backtest, BacktestResult
+from alpha_lab.backtest.engine import run_backtest
+from alpha_lab.backtest.result import BacktestResult
 
 __all__ = [
     "run_backtest",
